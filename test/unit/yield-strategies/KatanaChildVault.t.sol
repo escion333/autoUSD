@@ -89,6 +89,8 @@ contract KatanaChildVaultTest is Test {
     MockCCTPBridge public cctpBridge;
     MockTokenMessenger public tokenMessenger;
     MockMessageTransmitter public messageTransmitter;
+    MockERC20 public masterChef;
+    MockERC20 public sushiToken;
 
     address admin = address(this);
     uint32 constant MOTHER_CHAIN_DOMAIN = 1;
@@ -112,6 +114,9 @@ contract KatanaChildVaultTest is Test {
             address(messageTransmitter),
             address(messenger)
         );
+        
+        masterChef = new MockERC20("MasterChef", "CHEF", 18);
+        sushiToken = new MockERC20("SushiToken", "SUSHI", 18);
 
         mockPair.setToken0(address(usdc));
         mockPair.setToken1(address(weth));
@@ -121,6 +126,8 @@ contract KatanaChildVaultTest is Test {
             address(usdc),
             address(router),
             address(mockPair),
+            address(masterChef),
+            address(sushiToken),
             address(messenger),
             address(cctpBridge),
             admin

@@ -26,6 +26,7 @@ contract CrossChainMessenger is
     // Roles
     bytes32 public constant MESSENGER_ROLE = keccak256("MESSENGER_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+    bytes32 public constant RETRIER_ROLE = keccak256("RETRIER_ROLE");
 
     // Core contracts
     IMailbox public immutable hyperlaneMailbox;
@@ -42,6 +43,8 @@ contract CrossChainMessenger is
     // Message tracking
     mapping(bytes32 => bool) public processedMessages;
     mapping(bytes32 => MessageStatus) public messageStatuses;
+    mapping(bytes32 => FailedMessage) public failedMessages;
+    mapping(address => bytes32[]) public userFailedMessages;
 
     struct MessageStatus {
         bool processed;
@@ -50,14 +53,32 @@ contract CrossChainMessenger is
         bytes returnData;
     }
 
+    struct FailedMessage {
+        bytes32 messageId;
+        uint256 attempts;
+        uint256 lastAttempt;
+        bytes messageData;
+        CrossChainMessage originalMessage;
+        uint256 gasPayment;
+        address sender;
+        bool resolved;
+    }
+
     // Configuration
     uint256 public constant DEFAULT_GAS_LIMIT = 500_000;
     uint256 public constant MAX_MESSAGE_SIZE = 10_000; // bytes
     uint256 public constant MESSAGE_EXPIRY = 7 days;
+    uint256 public constant MAX_RETRIES = 3;
+    uint256[] public retryDelays = [1 minutes, 5 minutes, 15 minutes];
+    uint256 public constant RETRY_TIMEOUT = 1 hours;
 
     // Events
     event TrustedSenderSet(uint32 indexed domain, bytes32 indexed sender);
     event DomainConfigured(uint32 indexed chainId, uint32 domain);
+    event MessageRetryScheduled(bytes32 indexed messageId, uint256 attempt, uint256 nextRetryTime);
+    event MessageRetryAttempted(bytes32 indexed messageId, uint256 attempt, bool success);
+    event MessageRetryFailed(bytes32 indexed messageId, uint256 totalAttempts);
+    event MessageManuallyRetried(bytes32 indexed messageId, bytes32 newMessageId);
     
     // Additional errors
     error MessageTooLarge(uint256 size);
@@ -65,6 +86,10 @@ contract CrossChainMessenger is
     error UntrustedDomain(uint32 domain);
     error UntrustedSender(bytes32 sender);
     error InsufficientGasPayment(uint256 required, uint256 provided);
+    error MessageNotFailed(bytes32 messageId);
+    error RetryDelayNotElapsed(uint256 remainingTime);
+    error MaxRetriesExceeded(bytes32 messageId);
+    error MessageAlreadyResolved(bytes32 messageId);
 
     constructor(
         address _hyperlaneMailbox,
@@ -88,6 +113,7 @@ contract CrossChainMessenger is
         _grantRole(MESSENGER_ROLE, _admin);
         _grantRole(MESSENGER_ROLE, _motherVault);
         _grantRole(PAUSER_ROLE, _admin);
+        _grantRole(RETRIER_ROLE, _admin);
 
         // Configure common Hyperlane domains
         _configureDomain(8453, 8453); // Base
@@ -104,6 +130,23 @@ contract CrossChainMessenger is
     function sendCrossChainMessage(
         CrossChainMessage calldata message
     ) external payable override nonReentrant whenNotPaused onlyRole(MESSENGER_ROLE) returns (bytes32 messageId) {
+        // Create a memory copy for internal processing
+        CrossChainMessage memory messageCopy = message;
+        return _sendCrossChainMessageWithRetry(messageCopy, msg.value, msg.sender);
+    }
+
+    /**
+     * @notice Internal function to send cross-chain message with retry capability
+     * @param message The message to send
+     * @param gasPayment Gas payment amount
+     * @param sender Original sender address
+     * @return messageId Unique identifier for the message
+     */
+    function _sendCrossChainMessageWithRetry(
+        CrossChainMessage memory message,
+        uint256 gasPayment,
+        address sender
+    ) internal returns (bytes32 messageId) {
         // Validate message
         if (message.payload.length > MAX_MESSAGE_SIZE) {
             revert MessageTooLarge(message.payload.length);
@@ -129,27 +172,165 @@ contract CrossChainMessenger is
         bytes32 recipientAddress = bytes32(uint256(uint160(message.targetVault)));
 
         // Quote and check gas payment
-        uint256 gasPayment = gasPaymaster.quoteGasPayment(hyperlaneDomain, DEFAULT_GAS_LIMIT);
-        if (msg.value != gasPayment) {
-            revert InsufficientGasPayment(gasPayment, msg.value);
+        uint256 requiredGasPayment = gasPaymaster.quoteGasPayment(hyperlaneDomain, DEFAULT_GAS_LIMIT);
+        if (gasPayment != requiredGasPayment) {
+            revert InsufficientGasPayment(requiredGasPayment, gasPayment);
         }
 
-        // Dispatch message via Hyperlane
-        messageId = hyperlaneMailbox.dispatch(
+        try hyperlaneMailbox.dispatch(
             hyperlaneDomain,
             recipientAddress,
             encodedMessage
-        );
+        ) returns (bytes32 _messageId) {
+            messageId = _messageId;
+            
+            // Pay for gas
+            try gasPaymaster.payForGas{value: gasPayment}(
+                messageId,
+                hyperlaneDomain,
+                DEFAULT_GAS_LIMIT,
+                sender
+            ) {
+                emit MessageSent(message.targetChainId, message.messageType, messageId, message.nonce);
+            } catch (bytes memory reason) {
+                // If gas payment fails, schedule for retry
+                _scheduleMessageRetry(messageId, message, encodedMessage, gasPayment, sender, reason);
+            }
+        } catch (bytes memory reason) {
+            // Generate a pseudo message ID for failed dispatch
+            messageId = keccak256(abi.encodePacked(block.timestamp, sender, encodedMessage));
+            _scheduleMessageRetry(messageId, message, encodedMessage, gasPayment, sender, reason);
+        }
+    }
 
-        // Pay for gas
-        gasPaymaster.payForGas{value: gasPayment}(
-            messageId,
-            hyperlaneDomain,
-            DEFAULT_GAS_LIMIT,
-            msg.sender
-        );
+    /**
+     * @notice Schedule a failed message for retry
+     * @param messageId Message identifier
+     * @param message Original message
+     * @param encodedMessage Encoded message data
+     * @param gasPayment Gas payment amount
+     * @param sender Original sender
+     * @param failureReason Reason for failure
+     */
+    function _scheduleMessageRetry(
+        bytes32 messageId,
+        CrossChainMessage memory message,
+        bytes memory encodedMessage,
+        uint256 gasPayment,
+        address sender,
+        bytes memory failureReason
+    ) internal {
+        failedMessages[messageId] = FailedMessage({
+            messageId: messageId,
+            attempts: 0,
+            lastAttempt: block.timestamp,
+            messageData: encodedMessage,
+            originalMessage: message,
+            gasPayment: gasPayment,
+            sender: sender,
+            resolved: false
+        });
+
+        userFailedMessages[sender].push(messageId);
         
-        emit MessageSent(message.targetChainId, message.messageType, messageId, message.nonce);
+        messageStatuses[messageId] = MessageStatus({
+            processed: false,
+            success: false,
+            timestamp: block.timestamp,
+            returnData: failureReason
+        });
+
+        emit MessageRetryScheduled(messageId, 0, block.timestamp + retryDelays[0]);
+    }
+
+    /**
+     * @notice Automatically retry a failed message
+     * @param messageId Message identifier to retry
+     */
+    function retryFailedMessage(bytes32 messageId) external nonReentrant whenNotPaused {
+        FailedMessage storage failed = failedMessages[messageId];
+        
+        if (failed.messageId == bytes32(0)) revert MessageNotFailed(messageId);
+        if (failed.resolved) revert MessageAlreadyResolved(messageId);
+        if (failed.attempts >= MAX_RETRIES) revert MaxRetriesExceeded(messageId);
+
+        // Check retry delay
+        uint256 retryDelay = retryDelays[failed.attempts];
+        if (block.timestamp < failed.lastAttempt + retryDelay) {
+            revert RetryDelayNotElapsed(failed.lastAttempt + retryDelay - block.timestamp);
+        }
+
+        failed.attempts++;
+        failed.lastAttempt = block.timestamp;
+
+        // Attempt to resend
+        uint32 hyperlaneDomain = chainToHyperlaneDomain[failed.originalMessage.targetChainId];
+        bytes32 recipientAddress = bytes32(uint256(uint160(failed.originalMessage.targetVault)));
+
+        bool success = false;
+        try hyperlaneMailbox.dispatch(
+            hyperlaneDomain,
+            recipientAddress,
+            failed.messageData
+        ) returns (bytes32 newMessageId) {
+            // Update message ID
+            failed.messageId = newMessageId;
+            
+            try gasPaymaster.payForGas{value: failed.gasPayment}(
+                newMessageId,
+                hyperlaneDomain,
+                DEFAULT_GAS_LIMIT,
+                failed.sender
+            ) {
+                success = true;
+                failed.resolved = true;
+                
+                messageStatuses[messageId].success = true;
+                messageStatuses[messageId].processed = true;
+                messageStatuses[messageId].timestamp = block.timestamp;
+                
+                emit MessageSent(failed.originalMessage.targetChainId, failed.originalMessage.messageType, newMessageId, failed.originalMessage.nonce);
+            } catch {
+                // Gas payment failed, will retry later
+            }
+        } catch {
+            // Dispatch failed, will retry later
+        }
+
+        emit MessageRetryAttempted(messageId, failed.attempts, success);
+
+        if (!success && failed.attempts >= MAX_RETRIES) {
+            emit MessageRetryFailed(messageId, failed.attempts);
+        } else if (!success) {
+            uint256 nextRetryTime = block.timestamp + retryDelays[failed.attempts < retryDelays.length ? failed.attempts : retryDelays.length - 1];
+            emit MessageRetryScheduled(messageId, failed.attempts, nextRetryTime);
+        }
+    }
+
+    /**
+     * @notice Manually retry a failed message (admin only)
+     * @param messageId Message identifier to retry
+     */
+    function manualRetryMessage(bytes32 messageId) external payable nonReentrant whenNotPaused onlyRole(RETRIER_ROLE) returns (bytes32 newMessageId) {
+        FailedMessage storage failed = failedMessages[messageId];
+        
+        if (failed.messageId == bytes32(0)) revert MessageNotFailed(messageId);
+        if (failed.resolved) revert MessageAlreadyResolved(messageId);
+
+        // Mark as resolved regardless of outcome
+        failed.resolved = true;
+        
+        // Create a memory copy of the original message for calldata
+        CrossChainMessage memory messageCopy = failed.originalMessage;
+        
+        // Attempt manual retry with potentially updated gas payment
+        newMessageId = _sendCrossChainMessageWithRetry(messageCopy, msg.value, failed.sender);
+        
+        messageStatuses[messageId].success = true;
+        messageStatuses[messageId].processed = true;
+        messageStatuses[messageId].timestamp = block.timestamp;
+        
+        emit MessageManuallyRetried(messageId, newMessageId);
     }
 
     /**
@@ -225,6 +406,56 @@ contract CrossChainMessenger is
         });
 
         emit MessageProcessed(messageId, success, returnData);
+    }
+
+    /**
+     * @notice Get failed message details
+     * @param messageId Message identifier
+     * @return FailedMessage struct with details
+     */
+    function getFailedMessage(bytes32 messageId) external view returns (FailedMessage memory) {
+        return failedMessages[messageId];
+    }
+
+    /**
+     * @notice Get all failed messages for a user
+     * @param user User address
+     * @return Array of message IDs
+     */
+    function getUserFailedMessages(address user) external view returns (bytes32[] memory) {
+        return userFailedMessages[user];
+    }
+
+    /**
+     * @notice Check if a message can be retried
+     * @param messageId Message identifier
+     * @return canRetry Whether the message can be retried
+     * @return timeUntilRetry Time until next retry is allowed
+     */
+    function canRetryMessage(bytes32 messageId) external view returns (bool canRetry, uint256 timeUntilRetry) {
+        FailedMessage memory failed = failedMessages[messageId];
+        
+        if (failed.messageId == bytes32(0) || failed.resolved || failed.attempts >= MAX_RETRIES) {
+            return (false, 0);
+        }
+
+        uint256 retryDelay = retryDelays[failed.attempts];
+        uint256 nextRetryTime = failed.lastAttempt + retryDelay;
+        
+        if (block.timestamp >= nextRetryTime) {
+            return (true, 0);
+        } else {
+            return (false, nextRetryTime - block.timestamp);
+        }
+    }
+
+    /**
+     * @notice Get retry configuration
+     * @return delays Array of retry delays
+     * @return maxRetries Maximum number of retries
+     */
+    function getRetryConfiguration() external view returns (uint256[] memory delays, uint256 maxRetries) {
+        return (retryDelays, MAX_RETRIES);
     }
 
     /**

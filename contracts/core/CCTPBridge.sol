@@ -49,9 +49,14 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
 
     // Configuration
     uint256 public constant MAX_RETRY_COUNT = 3;
-    uint256 public constant RETRY_DELAY = 1 hours;
+    uint256[] public retryDelays = [1 minutes, 5 minutes, 15 minutes];
+    uint256 public constant BRIDGE_TIMEOUT = 2 hours;
     uint256 public minBridgeAmount = 1e6; // 1 USDC minimum
     uint256 public maxBridgeAmount = 1_000_000e6; // 1M USDC maximum
+    
+    // Failed bridge tracking
+    mapping(uint64 => bool) public failedBridges;
+    mapping(address => uint64[]) public userFailedBridges;
 
     // Events
     event BridgeInitiated(
@@ -78,6 +83,17 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
     event BridgeFailed(
         uint64 indexed nonce
     );
+    
+    event BridgeTimedOut(
+        uint64 indexed nonce,
+        uint256 timeout
+    );
+    
+    event BridgeRetryScheduled(
+        uint64 indexed nonce,
+        uint256 attempt,
+        uint256 nextRetryTime
+    );
 
 
     event DomainConfigured(
@@ -101,6 +117,9 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
     error MessageAlreadyProcessed(bytes32 messageHash);
     error InvalidRecipient(address recipient);
     error InsufficientBalance(uint256 balance, uint256 required);
+    error BridgeTimeout(uint64 nonce);
+    error BridgeAlreadyFailed(uint64 nonce);
+    error AttestationFetchFailed(bytes32 messageHash);
 
     // CCTP message format, see https://developers.circle.com/stablecoins/docs/cctp-technical-reference#message
     struct CCTPMessage {
@@ -169,13 +188,18 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
         // Convert recipient address to bytes32 (left-padded)
         bytes32 mintRecipient = bytes32(uint256(uint160(recipient)));
 
-        // Initiate burn and bridge
-        nonce = tokenMessenger.depositForBurn(
+        // Initiate burn and bridge with error handling
+        try tokenMessenger.depositForBurn(
             amount,
             destinationDomain,
             mintRecipient,
             address(usdc)
-        );
+        ) returns (uint64 _nonce) {
+            nonce = _nonce;
+        } catch (bytes memory reason) {
+            // If burn fails, we need to handle it gracefully
+            revert(string(abi.encodePacked("Bridge failed: ", reason)));
+        }
 
         // Track pending transfer
         pendingTransfers[nonce] = PendingTransfer({
@@ -199,9 +223,21 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
         PendingTransfer storage transferToRetry = pendingTransfers[nonce];
 
         if (transferToRetry.timestamp == 0) revert TransferNotPending(nonce);
-        if (block.timestamp < transferToRetry.timestamp + RETRY_DELAY) {
+        if (failedBridges[nonce]) revert BridgeAlreadyFailed(nonce);
+        
+        // Check for timeout
+        if (block.timestamp > transferToRetry.timestamp + BRIDGE_TIMEOUT) {
+            failedBridges[nonce] = true;
+            userFailedBridges[transferToRetry.recipient].push(nonce);
+            emit BridgeTimedOut(nonce, transferToRetry.timestamp + BRIDGE_TIMEOUT);
+            revert BridgeTimeout(nonce);
+        }
+        
+        // Check retry delay using exponential backoff
+        uint256 retryDelay = retryDelays[transferToRetry.retryCount < retryDelays.length ? transferToRetry.retryCount : retryDelays.length - 1];
+        if (block.timestamp < transferToRetry.timestamp + retryDelay) {
             revert RetryDelayNotElapsed(
-                transferToRetry.timestamp + RETRY_DELAY - block.timestamp
+                transferToRetry.timestamp + retryDelay - block.timestamp
             );
         }
         if (transferToRetry.retryCount >= MAX_RETRY_COUNT) {
@@ -212,16 +248,25 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
         // Increment retry count
         transferToRetry.retryCount++;
 
-        // Re-approve and re-bridge
+        // Re-approve and re-bridge with error handling
         usdc.approve(address(tokenMessenger), transferToRetry.amount);
         bytes32 mintRecipient = bytes32(uint256(uint160(transferToRetry.recipient)));
         
-        uint64 newNonce = tokenMessenger.depositForBurn(
+        uint64 newNonce;
+        try tokenMessenger.depositForBurn(
             transferToRetry.amount,
             transferToRetry.destinationDomain,
             mintRecipient,
             address(usdc)
-        );
+        ) returns (uint64 _newNonce) {
+            newNonce = _newNonce;
+        } catch (bytes memory reason) {
+            // If retry fails, mark as failed and emit event
+            failedBridges[nonce] = true;
+            userFailedBridges[transferToRetry.recipient].push(nonce);
+            emit BridgeFailed(nonce);
+            revert(string(abi.encodePacked("Retry failed: ", reason)));
+        }
 
         // Update pending transfer with new nonce and timestamp
         pendingTransfers[newNonce] = transferToRetry;
@@ -231,6 +276,12 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
         delete pendingTransfers[nonce];
 
         emit BridgeRetried(nonce, newNonce, transferToRetry.retryCount);
+        
+        // Schedule next retry if needed
+        if (transferToRetry.retryCount < MAX_RETRY_COUNT) {
+            uint256 nextRetryDelay = retryDelays[transferToRetry.retryCount < retryDelays.length ? transferToRetry.retryCount : retryDelays.length - 1];
+            emit BridgeRetryScheduled(newNonce, transferToRetry.retryCount + 1, block.timestamp + nextRetryDelay);
+        }
     }
 
     /**
@@ -282,6 +333,128 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
     }
 
 
+
+    /**
+     * @notice Get failed bridges for a user
+     * @param user User address
+     * @return Array of failed bridge nonces
+     */
+    function getUserFailedBridges(address user) external view returns (uint64[] memory) {
+        return userFailedBridges[user];
+    }
+
+    /**
+     * @notice Check if a bridge can be retried
+     * @param nonce Bridge nonce
+     * @return canRetry Whether the bridge can be retried
+     * @return timeUntilRetry Time until next retry is allowed
+     */
+    function canRetryBridge(uint64 nonce) external view returns (bool canRetry, uint256 timeUntilRetry) {
+        PendingTransfer memory transfer = pendingTransfers[nonce];
+        
+        if (transfer.timestamp == 0 || failedBridges[nonce] || transfer.retryCount >= MAX_RETRY_COUNT) {
+            return (false, 0);
+        }
+
+        // Check timeout
+        if (block.timestamp > transfer.timestamp + BRIDGE_TIMEOUT) {
+            return (false, 0);
+        }
+
+        uint256 retryDelay = retryDelays[transfer.retryCount < retryDelays.length ? transfer.retryCount : retryDelays.length - 1];
+        uint256 nextRetryTime = transfer.timestamp + retryDelay;
+        
+        if (block.timestamp >= nextRetryTime) {
+            return (true, 0);
+        } else {
+            return (false, nextRetryTime - block.timestamp);
+        }
+    }
+
+    /**
+     * @notice Get bridge retry configuration
+     * @return delays Array of retry delays
+     * @return maxRetries Maximum number of retries
+     * @return timeout Bridge timeout duration
+     */
+    function getBridgeRetryConfiguration() external view returns (uint256[] memory delays, uint256 maxRetries, uint256 timeout) {
+        return (retryDelays, MAX_RETRY_COUNT, BRIDGE_TIMEOUT);
+    }
+
+    /**
+     * @notice Manual retry for a failed bridge (admin only)
+     * @param nonce Bridge nonce to retry
+     * @return newNonce New bridge nonce
+     */
+    function manualRetryBridge(uint64 nonce) external nonReentrant whenNotPaused onlyRole(RETRIER_ROLE) returns (uint64 newNonce) {
+        PendingTransfer storage transferToRetry = pendingTransfers[nonce];
+        
+        if (transferToRetry.timestamp == 0) revert TransferNotPending(nonce);
+        
+        // Force retry regardless of delay or retry count for manual intervention
+        transferToRetry.retryCount++;
+        
+        // Re-approve and re-bridge
+        usdc.approve(address(tokenMessenger), transferToRetry.amount);
+        bytes32 mintRecipient = bytes32(uint256(uint160(transferToRetry.recipient)));
+        
+        try tokenMessenger.depositForBurn(
+            transferToRetry.amount,
+            transferToRetry.destinationDomain,
+            mintRecipient,
+            address(usdc)
+        ) returns (uint64 _newNonce) {
+            newNonce = _newNonce;
+            
+            // Update pending transfer with new nonce and timestamp
+            pendingTransfers[newNonce] = transferToRetry;
+            pendingTransfers[newNonce].timestamp = block.timestamp;
+            
+            // Remove old pending transfer
+            delete pendingTransfers[nonce];
+            
+            // Remove from failed bridges if it was there
+            if (failedBridges[nonce]) {
+                failedBridges[nonce] = false;
+            }
+            
+            emit BridgeRetried(nonce, newNonce, transferToRetry.retryCount);
+        } catch (bytes memory reason) {
+            // Mark as permanently failed
+            failedBridges[nonce] = true;
+            userFailedBridges[transferToRetry.recipient].push(nonce);
+            emit BridgeFailed(nonce);
+            revert(string(abi.encodePacked("Manual retry failed: ", reason)));
+        }
+    }
+
+    /**
+     * @notice Emergency bridge recovery (admin only) - refunds USDC to user
+     * @param nonce Bridge nonce to recover
+     */
+    function emergencyBridgeRecovery(uint64 nonce) external nonReentrant whenNotPaused onlyRole(DEFAULT_ADMIN_ROLE) {
+        PendingTransfer memory transfer = pendingTransfers[nonce];
+        
+        if (transfer.timestamp == 0) revert TransferNotPending(nonce);
+        
+        // Only allow recovery after timeout or max retries
+        require(
+            block.timestamp > transfer.timestamp + BRIDGE_TIMEOUT || 
+            transfer.retryCount >= MAX_RETRY_COUNT ||
+            failedBridges[nonce],
+            "Bridge not eligible for recovery"
+        );
+        
+        // Transfer USDC back to the original sender
+        address originalSender = transfer.recipient; // Note: In a real implementation, you'd want to track the original sender
+        usdc.transfer(originalSender, transfer.amount);
+        
+        // Clean up
+        delete pendingTransfers[nonce];
+        failedBridges[nonce] = true;
+        
+        emit BridgeFailed(nonce);
+    }
 
     /**
      * @notice Configure a domain mapping

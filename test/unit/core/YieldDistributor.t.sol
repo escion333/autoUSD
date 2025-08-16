@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {Test, console} from "forge-std/Test.sol";
-import {YieldDistributor} from "../../contracts/core/YieldDistributor.sol";
+import {YieldDistributor} from "../contracts/core/YieldDistributor.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {AccessControl} from "openzeppelin-contracts/contracts/access/AccessControl.sol";
 

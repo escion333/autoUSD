@@ -26,6 +26,7 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
     uint256 public constant FEE_DIVISOR = 10_000;
     uint256 public constant USDC_INIT_DEPOSIT = 100 * 1e6;
     address public constant DEAD_ADDRESS = 0x000000000000000000000000000000000000dEaD;
+    uint256 public constant BUFFER_PERCENTAGE = 500; // 5% in basis points
     
     IERC20 public immutable override USDC;
     uint8 private immutable _usdcDecimals;
@@ -36,6 +37,7 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
     uint256 public override minAPYDifferential;
     uint256 public override lastRebalanceTime;
     address public override feeSink;
+    bool public bufferManagementEnabled = true;
     
     // Rate limiting for rebalancing
     uint256 public constant MAX_REBALANCE_FREQUENCY = 4; // Max rebalances per day
@@ -112,6 +114,42 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
         return _totalDeployed;
     }
     
+    /**
+     * @dev Returns the required buffer amount (5% of total assets)
+     */
+    function getRequiredBuffer() public view returns (uint256) {
+        if (!bufferManagementEnabled) return 0;
+        return (totalAssets() * BUFFER_PERCENTAGE) / FEE_DIVISOR;
+    }
+    
+    /**
+     * @dev Returns the current buffer amount (idle USDC balance)
+     */
+    function getCurrentBuffer() public view returns (uint256) {
+        return _totalIdle;
+    }
+    
+    /**
+     * @dev Checks if the current buffer is sufficient
+     */
+    function isBufferSufficient() public view returns (bool) {
+        if (!bufferManagementEnabled) return true;
+        return getCurrentBuffer() >= getRequiredBuffer();
+    }
+    
+    /**
+     * @dev Returns the amount available for deployment (excess above buffer)
+     */
+    function getDeployableAmount() public view returns (uint256) {
+        if (!bufferManagementEnabled) return _totalIdle;
+        
+        uint256 requiredBuffer = getRequiredBuffer();
+        uint256 currentBuffer = getCurrentBuffer();
+        
+        if (currentBuffer <= requiredBuffer) return 0;
+        return currentBuffer - requiredBuffer;
+    }
+    
     function convertToShares(uint256 assets) public view override returns (uint256) {
         return _convertToShares(assets, Math.Rounding.Floor);
     }
@@ -142,7 +180,7 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
         uint256 ownerShares = balanceOf(owner);
         if (ownerShares == 0) return 0;
         
-        uint256 availableAssets = _totalIdle;
+        uint256 availableAssets = _getAvailableForWithdrawal();
         uint256 ownerAssets = _convertToAssets(ownerShares, Math.Rounding.Floor);
         
         return availableAssets > ownerAssets ? ownerAssets : availableAssets;
@@ -154,7 +192,7 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
         uint256 ownerShares = balanceOf(owner);
         if (ownerShares == 0) return 0;
         
-        uint256 availableAssets = _totalIdle;
+        uint256 availableAssets = _getAvailableForWithdrawal();
         uint256 maxSharesForAvailable = _convertToShares(availableAssets, Math.Rounding.Floor);
         
         return ownerShares > maxSharesForAvailable ? maxSharesForAvailable : ownerShares;
@@ -337,6 +375,11 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
         require(block.timestamp >= lastRebalanceTime + rebalanceCooldown, "Cooldown active");
         require(params.amount > 0, "Zero amount");
         
+        if (bufferManagementEnabled) {
+            uint256 deployableAmount = getDeployableAmount();
+            require(params.amount <= deployableAmount, "Amount exceeds deployable (buffer requirement)");
+        }
+        
         _enforceRateLimit();
         
         require(_childVaults[params.targetChainId].isActive, "Target not active");
@@ -363,6 +406,11 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
         require(block.timestamp >= lastRebalanceTime + rebalanceCooldown, "Cooldown active");
         _enforceRateLimit();
 
+        // Check buffer status before rebalancing
+        if (bufferManagementEnabled && !isBufferSufficient()) {
+            revert("Buffer insufficient for rebalancing");
+        }
+
         (uint32 bestChain, uint32 worstChain) = _findBestAndWorstPerformingVaults();
 
         require(bestChain != 0 && worstChain != 0 && bestChain != worstChain, "No rebalance needed");
@@ -384,12 +432,43 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
         }
     }
     
+    /**
+     * @dev Initiates a rebalance operation by withdrawing from source and deploying to target
+     * This function is called by the Rebalancer contract
+     */
+    function initiateRebalance(uint32 sourceChainId, uint32 targetChainId, uint256 amount) 
+        external 
+        onlyRole(REBALANCER_ROLE) 
+        whenNotPaused 
+    {
+        require(_childVaults[sourceChainId].isActive, "Source vault not active");
+        require(_childVaults[targetChainId].isActive, "Target vault not active");
+        require(amount > 0, "Zero amount");
+        
+        // Ensure we have sufficient deployed funds in source vault
+        require(_childVaults[sourceChainId].deployedAmount >= amount, "Insufficient deployed funds in source");
+        
+        // Initiate withdrawal from source vault
+        _withdrawFromChild(sourceChainId, amount);
+        
+        emit RebalanceInitiated(sourceChainId, targetChainId, amount);
+        
+        // Note: The deployment to target vault will happen automatically 
+        // when the withdrawn funds are received via handleCCTPReceive
+    }
+    
     function deployToChildVault(uint32 domainId, uint256 amount) 
         external 
         onlyRole(MANAGER_ROLE) 
         onlyActiveChild(domainId)
     {
         require(amount <= _totalIdle, "Insufficient idle funds");
+        
+        if (bufferManagementEnabled) {
+            uint256 deployableAmount = getDeployableAmount();
+            require(amount <= deployableAmount, "Amount exceeds deployable (buffer requirement)");
+        }
+        
         _deployToChild(domainId, amount);
     }
     
@@ -435,6 +514,42 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
         bytes32 messageId = crossChainMessenger.sendCrossChainMessage{value: fee}(crossChainMsg);
         
         emit WithdrawalRequestSent(domainId, amount, messageId);
+    }
+    
+    /**
+     * @dev Requests buffer refill by proportionally withdrawing from all child vaults
+     * This function is called when buffer is below the required threshold
+     */
+    function requestBufferRefill() external onlyRole(MANAGER_ROLE) {
+        require(bufferManagementEnabled, "Buffer management disabled");
+        require(!isBufferSufficient(), "Buffer is sufficient");
+        
+        uint256 bufferDeficit = getRequiredBuffer() - getCurrentBuffer();
+        require(bufferDeficit > 0, "No buffer deficit");
+        
+        uint256 totalDeployed = _totalDeployed;
+        require(totalDeployed > 0, "No deployed funds to recall");
+        
+        // Proportionally withdraw from all active child vaults
+        for (uint256 i = 0; i < _activeChainIds.length; i++) {
+            uint32 chainId = _activeChainIds[i];
+            ChildVault storage vault = _childVaults[chainId];
+            
+            if (vault.deployedAmount > 0) {
+                // Calculate proportional amount to withdraw from this vault
+                uint256 withdrawAmount = (bufferDeficit * vault.deployedAmount) / totalDeployed;
+                
+                // Don't withdraw more than what's deployed in this vault
+                if (withdrawAmount > vault.deployedAmount) {
+                    withdrawAmount = vault.deployedAmount;
+                }
+                
+                if (withdrawAmount > 0) {
+                    _withdrawFromChild(chainId, withdrawAmount);
+                    emit BufferRefillRequested(chainId, withdrawAmount);
+                }
+            }
+        }
     }
     
     function handleIncomingMessage(uint32 origin, bytes32 sender, bytes calldata message) 
@@ -518,6 +633,16 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
     
     function setMinAPYDifferential(uint256 minDifferentialBps) external override onlyRole(MANAGER_ROLE) {
         minAPYDifferential = minDifferentialBps;
+    }
+    
+    function setBufferManagement(bool enabled) external onlyRole(MANAGER_ROLE) {
+        bool oldState = bufferManagementEnabled;
+        bufferManagementEnabled = enabled;
+        
+        if (oldState != enabled) {
+            emit BufferManagementToggled(enabled);
+            emit BufferStatusChanged(getRequiredBuffer(), getCurrentBuffer(), isBufferSufficient());
+        }
     }
     
     function collectManagementFees() external override returns (uint256 feeAmount) {
@@ -657,5 +782,21 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
         }
         
         return 0;
+    }
+    
+    /**
+     * @dev Returns the amount of assets available for withdrawal considering buffer requirements
+     */
+    function _getAvailableForWithdrawal() private view returns (uint256) {
+        if (!bufferManagementEnabled) return _totalIdle;
+        
+        uint256 requiredBuffer = getRequiredBuffer();
+        uint256 currentBuffer = getCurrentBuffer();
+        
+        // If we're below buffer, no withdrawals allowed
+        if (currentBuffer <= requiredBuffer) return 0;
+        
+        // Only allow withdrawal of excess above buffer
+        return currentBuffer - requiredBuffer;
     }
 }

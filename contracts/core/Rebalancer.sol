@@ -7,8 +7,14 @@ import { Pausable } from "@openzeppelin/contracts/utils/Pausable.sol";
 import { AccessControl } from "@openzeppelin/contracts/access/AccessControl.sol";
 import { IMotherVault } from "../interfaces/IMotherVault.sol";
 
+interface IMotherVaultWithBuffer is IMotherVault {
+    function getDeployableAmount() external view returns (uint256);
+    function isBufferSufficient() external view returns (bool);
+}
+
 interface IMotherVaultWithRebalance is IMotherVault {
     function initiateRebalance(uint32 sourceChainId, uint32 targetChainId, uint256 amount) external;
+    function deployToChildVault(uint32 domainId, uint256 amount) external;
 }
 
 contract Rebalancer is IRebalancer, ReentrancyGuard, Pausable, AccessControl {
@@ -20,6 +26,7 @@ contract Rebalancer is IRebalancer, ReentrancyGuard, Pausable, AccessControl {
     uint32[] public activeChains;
     RebalanceConfig public rebalanceConfig;
     uint256 private _lastRebalanceTime;
+    uint256 public bufferThreshold = 500; // 5% in basis points
 
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
@@ -52,6 +59,36 @@ contract Rebalancer is IRebalancer, ReentrancyGuard, Pausable, AccessControl {
     }
 
     function evaluateRebalance() external view override returns (RebalanceDecision memory decision) {
+        // First, check buffer sufficiency
+        if (!checkBufferBeforeRebalance()) {
+            return RebalanceDecision(0, 0, 0, 0, 0, false, "Buffer insufficient");
+        }
+        
+        // Check if there are idle funds to deploy (above buffer requirement)
+        uint256 deployableAmount = getDeployableAmount();
+        if (deployableAmount >= rebalanceConfig.minRebalanceAmount) {
+            uint32 bestTargetChain = 0;
+            uint256 bestApy = 0;
+            for (uint i = 0; i < activeChains.length; i++) {
+                uint32 chainId = activeChains[i];
+                if (chainMetrics[chainId].currentAPY > bestApy) {
+                    bestApy = chainMetrics[chainId].currentAPY;
+                    bestTargetChain = chainId;
+                }
+            }
+            if (bestTargetChain != 0) {
+                 return RebalanceDecision(
+                    0, // Source chain 0 indicates deploying idle funds
+                    bestTargetChain,
+                    deployableAmount > rebalanceConfig.maxRebalanceAmount ? rebalanceConfig.maxRebalanceAmount : deployableAmount,
+                    bestApy,
+                    0,
+                    true,
+                    "Deploy idle funds"
+                );
+            }
+        }
+        
         uint256 chainsCount = activeChains.length;
         if (chainsCount < 2) {
             return RebalanceDecision(0, 0, 0, 0, 0, false, "Insufficient active chains");
@@ -259,15 +296,30 @@ contract Rebalancer is IRebalancer, ReentrancyGuard, Pausable, AccessControl {
     {
         require(decision.shouldExecute, "Decision not executable");
         
+        // Double-check buffer before execution
+        require(checkBufferBeforeRebalance(), "Buffer insufficient for execution");
+        
         // Update last rebalance time
         _lastRebalanceTime = block.timestamp;
-        
-        // Execute rebalance through MotherVault
-        IMotherVaultWithRebalance(address(motherVault)).initiateRebalance(
-            decision.sourceChainId,
-            decision.targetChainId,
-            decision.amountToMove
-        );
+
+        if (decision.sourceChainId == 0) {
+            // Deploy idle funds to the best chain (only deployable amount above buffer)
+            uint256 maxDeployable = getDeployableAmount();
+            uint256 actualAmount = decision.amountToMove > maxDeployable ? maxDeployable : decision.amountToMove;
+            require(actualAmount > 0, "No deployable amount available");
+            
+            IMotherVaultWithRebalance(address(motherVault)).deployToChildVault(
+                decision.targetChainId,
+                actualAmount
+            );
+        } else {
+            // Execute inter-chain rebalance through MotherVault
+            IMotherVaultWithRebalance(address(motherVault)).initiateRebalance(
+                decision.sourceChainId,
+                decision.targetChainId,
+                decision.amountToMove
+            );
+        }
         
         emit RebalanceTriggered(
             decision.sourceChainId,
@@ -302,6 +354,14 @@ contract Rebalancer is IRebalancer, ReentrancyGuard, Pausable, AccessControl {
         IMotherVaultWithRebalance(address(motherVault)).initiateRebalance(sourceChain, targetChain, amount);
 
         emit RebalanceTriggered(sourceChain, targetChain, amount, 0);
+    }
+
+    function getDeployableAmount() public view returns (uint256) {
+        return IMotherVaultWithBuffer(address(motherVault)).getDeployableAmount();
+    }
+
+    function checkBufferBeforeRebalance() internal view returns (bool) {
+        return IMotherVaultWithBuffer(address(motherVault)).isBufferSufficient();
     }
 }
 

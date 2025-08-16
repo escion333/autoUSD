@@ -7,10 +7,12 @@ import {CCTPBridge} from "../core/CCTPBridge.sol";
 import {ReentrancyGuard} from "openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
 import {Pausable} from "openzeppelin-contracts/contracts/utils/Pausable.sol";
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 import {AccessControl} from "openzeppelin-contracts/contracts/access/AccessControl.sol";
 
 import {IKatanaRouter} from "../interfaces/yield-strategies/IKatanaRouter.sol";
 import {IKatanaPair} from "../interfaces/yield-strategies/IKatanaPair.sol";
+import {IMasterChef} from "../interfaces/yield-strategies/IMasterChef.sol";
 
 contract KatanaChildVault is
     ReentrancyGuard,
@@ -18,18 +20,22 @@ contract KatanaChildVault is
     AccessControl,
     IMessageRecipient
 {
+    using SafeERC20 for IERC20;
 
     bytes32 public constant MESSENGER_ROLE = keccak256("MESSENGER_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
-
-    
 
     address public usdc;
     address public weth;
     address public katanaRouter;
     address public katanaPair;
+    IMasterChef public masterChef;
+    IERC20 public sushiToken;
     uint256 public totalShares;
     uint256 public slippageBps; 
+    uint256 public sushiConversionThreshold = 100 * 1e6; // $100 in USDC terms
+    uint256 public lastSushiHarvest;
+
 
     ICrossChainMessenger public crossChainMessenger;
     CCTPBridge public cctpBridge;
@@ -59,12 +65,16 @@ contract KatanaChildVault is
     event ProfitReported(uint256 profit);
     event SecurityLimitsUpdated(uint256 minLiquidity, uint256 maxDepositAmount);
     event EmergencyWithdrawal(uint256 usdcAmount, uint256 wethAmount);
+    event RewardsHarvested(uint256 amount);
+    event RewardsConverted(uint256 amountIn, uint256 amountOut);
 
 
     constructor(
         address _usdc,
         address _katanaRouter,
         address _katanaPair,
+        address _masterChef,
+        address _sushiToken,
         address _crossChainMessenger,
         address _cctpBridge,
         address _admin
@@ -72,6 +82,8 @@ contract KatanaChildVault is
         usdc = _usdc;
         katanaRouter = _katanaRouter;
         katanaPair = _katanaPair;
+        masterChef = IMasterChef(_masterChef);
+        sushiToken = IERC20(_sushiToken);
         crossChainMessenger = ICrossChainMessenger(_crossChainMessenger);
         cctpBridge = CCTPBridge(_cctpBridge);
         weth = IKatanaRouter(_katanaRouter).WETH();
@@ -124,6 +136,7 @@ contract KatanaChildVault is
     }
 
     function _handleDeposit(uint256 amount) internal {
+        harvestAndConvertSushi();
         require(amount <= maxDepositAmount, "Exceeds max deposit amount");
         (uint112 reserve0, uint112 reserve1, ) = IKatanaPair(katanaPair).getReserves();
         uint256 usdcReserve = IKatanaPair(katanaPair).token0() == usdc ? reserve0 : reserve1;
@@ -132,6 +145,8 @@ contract KatanaChildVault is
         // Check that we have enough USDC to process the deposit
         uint256 usdcBalance = IERC20(usdc).balanceOf(address(this));
         require(usdcBalance >= amount, "Insufficient USDC received");
+
+        _addLiquidity(amount);
 
         uint256 nav = _calculateNav();
         uint256 sharesToMint;
@@ -143,42 +158,6 @@ contract KatanaChildVault is
         totalShares += sharesToMint;
         lastHarvestNav += amount;
 
-        uint256 halfAmount = amount / 2;
-        IERC20(usdc).approve(katanaRouter, halfAmount);
-
-        address[] memory path = new address[](2);
-        path[0] = usdc;
-        path[1] = weth;
-
-        uint[] memory amountsOut = IKatanaRouter(katanaRouter).getAmountsOut(halfAmount, path);
-        uint256 minWethOut = amountsOut[1] * (10000 - slippageBps) / 10000;
-
-        IKatanaRouter(katanaRouter).swapExactTokensForTokens(
-            halfAmount,
-            minWethOut,
-            path,
-            address(this),
-            block.timestamp
-        );
-
-        uint256 wethBalance = IERC20(weth).balanceOf(address(this));
-        IERC20(usdc).approve(katanaRouter, halfAmount);
-        IERC20(weth).approve(katanaRouter, wethBalance);
-        
-        uint256 usdcBalanceForLP = IERC20(usdc).balanceOf(address(this));
-        uint256 minUsdcForLP = usdcBalanceForLP * (10000 - slippageBps) / 10000;
-        uint256 minWethForLP = wethBalance * (10000 - slippageBps) / 10000;
-
-        IKatanaRouter(katanaRouter).addLiquidity(
-                usdc,
-                weth,
-                halfAmount,
-                wethBalance,
-                minUsdcForLP,
-                minWethForLP,
-                address(this),
-                block.timestamp
-            );
 
         emit Deposited(amount, sharesToMint);
     }
@@ -192,7 +171,7 @@ contract KatanaChildVault is
             hasRole(MESSENGER_ROLE, msg.sender),
             "Caller is not the messenger"
         );
-
+        harvestAndConvertSushi();
         uint256 nav = _calculateNav();
         uint256 sharesToBurn = (amount * totalShares) / nav;
         totalShares -= sharesToBurn;
@@ -297,11 +276,12 @@ contract KatanaChildVault is
         return apy;
     }
 
-    function getVaultState() external view returns (uint256, uint256, uint256, uint256, uint256) {
-        return (_calculateNav(), IERC20(usdc).balanceOf(address(this)), IERC20(weth).balanceOf(address(this)), IERC20(katanaPair).balanceOf(address(this)), totalShares);
+    function getVaultState() external view returns (uint256, uint256, uint256, uint256, uint256, uint256) {
+        return (_calculateNav(), IERC20(usdc).balanceOf(address(this)), IERC20(weth).balanceOf(address(this)), IERC20(katanaPair).balanceOf(address(this)), totalShares, sushiToken.balanceOf(address(this)));
     }
 
     function harvest() public nonReentrant onlyRole(MESSENGER_ROLE) {
+        harvestAndConvertSushi();
         uint256 nav = _calculateNav();
         uint256 profit = 0;
         if (nav > lastHarvestNav) {
@@ -324,6 +304,113 @@ contract KatanaChildVault is
         } else {
             emit Harvested(0);
         }
+    }
+
+    function harvestSushiRewards() internal {
+        // Assuming pid 0 for the relevant LP pair
+        uint256 pendingSushi = masterChef.pendingSushi(0, address(this));
+        if (pendingSushi > 0) {
+            masterChef.harvest(0, address(this));
+            lastSushiHarvest = block.timestamp;
+            emit RewardsHarvested(pendingSushi);
+        }
+    }
+
+    function convertSushiToUsdc() internal returns (uint256 usdcReceived) {
+        uint256 sushiBalance = sushiToken.balanceOf(address(this));
+        if (sushiBalance == 0) {
+            return 0;
+        }
+
+        address[] memory path = new address[](2);
+        path[0] = address(sushiToken);
+        path[1] = usdc;
+
+        sushiToken.approve(katanaRouter, sushiBalance);
+
+        uint[] memory amountsOut = IKatanaRouter(katanaRouter).getAmountsOut(sushiBalance, path);
+        uint256 minUsdcOut = amountsOut[1] * (10000 - slippageBps) / 10000;
+
+        IKatanaRouter(katanaRouter).swapExactTokensForTokens(
+            sushiBalance,
+            minUsdcOut,
+            path,
+            address(this),
+            block.timestamp
+        );
+        usdcReceived = IERC20(usdc).balanceOf(address(this)); // Check balance after swap
+        emit RewardsConverted(sushiBalance, usdcReceived);
+        return usdcReceived;
+    }
+
+    function getSushiRewardsValue() public view returns (uint256 usdValue) {
+        uint256 sushiBalance = sushiToken.balanceOf(address(this));
+        if (sushiBalance == 0) {
+            uint256 pendingSushi = masterChef.pendingSushi(0, address(this));
+            if(pendingSushi == 0) return 0;
+            sushiBalance = pendingSushi;
+        }
+
+        address[] memory path = new address[](2);
+        path[0] = address(sushiToken);
+        path[1] = usdc;
+
+        uint[] memory amounts = IKatanaRouter(katanaRouter).getAmountsOut(sushiBalance, path);
+        return amounts[1];
+    }
+
+    function shouldHarvestSushi() public view returns (bool) {
+        return getSushiRewardsValue() >= sushiConversionThreshold;
+    }
+
+    function harvestAndConvertSushi() internal {
+        if (shouldHarvestSushi()) {
+            harvestSushiRewards();
+            uint256 usdcFromRewards = convertSushiToUsdc();
+            if (usdcFromRewards > 0) {
+                _addLiquidity(usdcFromRewards);
+            }
+        }
+    }
+
+    function _addLiquidity(uint256 amount) internal {
+        uint256 halfAmount = amount / 2;
+        IERC20(usdc).approve(katanaRouter, halfAmount);
+
+        address[] memory path = new address[](2);
+        path[0] = usdc;
+        path[1] = weth;
+
+        uint[] memory amountsOut = IKatanaRouter(katanaRouter).getAmountsOut(halfAmount, path);
+        uint256 minWethOut = amountsOut[1] * (10000 - slippageBps) / 10000;
+
+        IKatanaRouter(katanaRouter).swapExactTokensForTokens(
+            halfAmount,
+            minWethOut,
+            path,
+            address(this),
+            block.timestamp
+        );
+
+        uint256 wethBalance = IERC20(weth).balanceOf(address(this));
+        uint256 usdcBalanceForLP = IERC20(usdc).balanceOf(address(this));
+
+        IERC20(usdc).approve(katanaRouter, usdcBalanceForLP);
+        IERC20(weth).approve(katanaRouter, wethBalance);
+        
+        uint256 minUsdcForLP = usdcBalanceForLP * (10000 - slippageBps) / 10000;
+        uint256 minWethForLP = wethBalance * (10000 - slippageBps) / 10000;
+
+        IKatanaRouter(katanaRouter).addLiquidity(
+                usdc,
+                weth,
+                usdcBalanceForLP,
+                wethBalance,
+                minUsdcForLP,
+                minWethForLP,
+                address(this),
+                block.timestamp
+            );
     }
 
     function reportApy() public nonReentrant onlyRole(MESSENGER_ROLE) {
@@ -353,6 +440,10 @@ contract KatanaChildVault is
         minLiquidity = _minLiquidity;
         maxDepositAmount = _maxDepositAmount;
         emit SecurityLimitsUpdated(_minLiquidity, _maxDepositAmount);
+    }
+
+    function setSushiConversionThreshold(uint256 _threshold) external onlyRole(DEFAULT_ADMIN_ROLE){
+        sushiConversionThreshold = _threshold;
     }
 
     function setSlippage(uint256 _slippageBps) external onlyRole(DEFAULT_ADMIN_ROLE) {

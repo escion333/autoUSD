@@ -33,6 +33,11 @@ interface IMotherVault is IERC4626 {
     event ManagementFeeCollected(uint256 feeAmount, address indexed feeSink);
     event EmergencyWithdrawal(address indexed recipient, uint256 amount);
     
+    // Buffer management events
+    event BufferRefillRequested(uint32 indexed chainId, uint256 amount);
+    event BufferStatusChanged(uint256 requiredBuffer, uint256 currentBuffer, bool sufficient);
+    event BufferManagementToggled(bool enabled);
+    
     error DepositExceedsCap(uint256 requested, uint256 cap);
     error InsufficientAPYDifferential(uint256 differential, uint256 required);
     error RebalanceCooldownActive(uint256 timeRemaining);
@@ -90,4 +95,19 @@ interface IMotherVault is IERC4626 {
     function feeSink() external view returns (address);
     
     function isPaused() external view returns (bool);
+    
+    // Buffer management functions
+    function getRequiredBuffer() external view returns (uint256);
+    
+    function getCurrentBuffer() external view returns (uint256);
+    
+    function isBufferSufficient() external view returns (bool);
+    
+    function getDeployableAmount() external view returns (uint256);
+    
+    function requestBufferRefill() external;
+    
+    function setBufferManagement(bool enabled) external;
+    
+    function bufferManagementEnabled() external view returns (bool);
 }
