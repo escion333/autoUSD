@@ -1,0 +1,29 @@
+{
+  "contracts_allowlist": [
+    "contracts/MotherVault.sol",
+    "contracts/core/CCTPBridge.sol",
+    "contracts/core/CrossChainMessenger.sol"
+  ],
+  "tests_allowlist": [
+    "test/MotherVault.t.sol",
+    "test/CCTPBridge.t.sol",
+    "test/CrossChainMessenger.t.sol"
+  ],
+  "explicit_exclusions": [
+    "contracts/interfaces/CCTP/IMessageTransmitter.sol",
+    "contracts/interfaces/CCTP/ITokenMessenger.sol",
+    "contracts/interfaces/Hyperlane/IInterchainGasPaymaster.sol",
+    "contracts/interfaces/Hyperlane/IMailbox.sol",
+    "contracts/interfaces/Hyperlane/IMessageRecipient.sol",
+    "contracts/interfaces/IChildVault.sol",
+    "contracts/interfaces/ICrossChainMessenger.sol",
+    "contracts/interfaces/IMotherVault.sol",
+    "contracts/interfaces/IRebalancer.sol",
+    "test/mocks/MockERC20.sol",
+    "test/mocks/MockInterchainGasPaymaster.sol",
+    "test/mocks/MockMailbox.sol",
+    "test/mocks/MockMessageTransmitter.sol",
+    "test/mocks/MockMotherVault.sol",
+    "test/mocks/MockTokenMessenger.sol"
+  ]
+}

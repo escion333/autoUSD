@@ -1,0 +1,8 @@
+Compiler run failed:
+Error (7576): Undeclared identifier.
+   --> contracts/MotherVault.sol:440:14:
+    |
+440 |         emit EmergencyWithdrawal(feeSink, idleBalance);
+    |              ^^^^^^^^^^^^^^^^^^^
+
+Error: Compilation failed

@@ -30,10 +30,15 @@ test-results/
 # Documentation (internal AI resources)
 docs/
 
+# Reports and logs
+logs/
+reports/
+
 # Temporary files
 *.tmp
 temp/
 tmp/
+.verifier_tmp/
 
 # Private keys
 *.pem
