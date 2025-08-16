@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Circle SDK Test</title>
+</head>
+<body>
+    <h1>Circle SDK Quick Test</h1>
+    <button onclick="testCircle()">Test Circle SDK</button>
+    <div id="output"></div>
+
+    <script src="https://sdk.circle.com/v1/w3s-pw-web-sdk.js"></script>
+    <script>
+        const APP_ID = '6ebcb0d4b03219ba9c3a7b9fd5c911a7:5dd8672b95beb0f343c486ab5eeef79e';
+        
+        async function testCircle() {
+            const output = document.getElementById('output');
+            output.innerHTML = '<p>Testing Circle SDK...</p>';
+            
+            try {
+                // Initialize SDK
+                const sdk = new window.W3SSdk();
+                await sdk.setAppSettings({ appId: APP_ID });
+                output.innerHTML += '<p>✅ SDK Initialized</p>';
+                
+                // Test email challenge
+                const testEmail = prompt('Enter test email:');
+                if (testEmail) {
+                    const challengeId = await sdk.execute(sdk.challengeIdByEmail(testEmail));
+                    output.innerHTML += `<p>✅ Challenge sent! ID: ${challengeId}</p>`;
+                    output.innerHTML += '<p>Check your email for OTP</p>';
+                    
+                    // Store for manual verification
+                    window.testChallengeId = challengeId;
+                    window.testSDK = sdk;
+                    
+                    output.innerHTML += '<p>Run in console: <code>verifyOTP("123456")</code></p>';
+                }
+            } catch (error) {
+                output.innerHTML += `<p>❌ Error: ${error.message}</p>`;
+                console.error(error);
+            }
+        }
+        
+        // Helper function for console
+        window.verifyOTP = async function(otp) {
+            if (!window.testChallengeId || !window.testSDK) {
+                console.error('Run testCircle() first');
+                return;
+            }
+            
+            try {
+                const result = await window.testSDK.execute(
+                    window.testSDK.verifyChallenge(window.testChallengeId, otp)
+                );
+                console.log('✅ Verification successful!', result);
+                return result;
+            } catch (error) {
+                console.error('❌ Verification failed:', error);
+            }
+        }
+    </script>
+</body>
+</html>

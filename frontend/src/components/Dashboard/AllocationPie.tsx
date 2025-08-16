@@ -18,7 +18,7 @@ export function AllocationPie({ vaultStats }: AllocationPieProps) {
   if (!vaultStats) {
     return (
       <div className="h-48 flex items-center justify-center">
-        <p className="text-gray-500 text-sm">No allocation data</p>
+        <p className="text-gray-700 text-sm">No allocation data</p>
       </div>
     );
   }
@@ -44,7 +44,7 @@ export function AllocationPie({ vaultStats }: AllocationPieProps) {
       return (
         <div className="bg-white px-3 py-2 rounded-lg shadow-lg border border-gray-200">
           <p className="text-sm font-medium">{payload[0].name}</p>
-          <p className="text-sm text-gray-600">{payload[0].value.toFixed(1)}%</p>
+          <p className="text-sm text-gray-700">{payload[0].value.toFixed(1)}%</p>
         </div>
       );
     }

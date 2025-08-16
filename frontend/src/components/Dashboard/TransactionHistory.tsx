@@ -34,8 +34,8 @@ export function TransactionHistory() {
   if (!transactions || transactions.length === 0) {
     return (
       <div className="text-center py-8">
-        <p className="text-gray-500">No transactions yet</p>
-        <p className="text-sm text-gray-400 mt-1">Your deposits and withdrawals will appear here</p>
+        <p className="text-gray-700">No transactions yet</p>
+        <p className="text-sm text-gray-700 mt-1">Your deposits and withdrawals will appear here</p>
       </div>
     );
   }
@@ -55,7 +55,7 @@ export function TransactionHistory() {
               <p className="font-medium text-gray-900">
                 {tx.type === 'deposit' ? 'Deposited' : tx.type === 'withdraw' ? 'Withdrew' : 'Rebalanced'}
               </p>
-              <p className="text-sm text-gray-500">
+              <p className="text-sm text-gray-700">
                 {new Date(tx.timestamp).toLocaleString()}
               </p>
             </div>
@@ -64,7 +64,7 @@ export function TransactionHistory() {
           <div className="flex items-center gap-4">
             <div className="text-right">
               <p className="font-medium text-gray-900">
-                {tx.type === 'rebalance' ? 'Auto' : formatUSDC(tx.amount)}
+                {tx.type === 'rebalance' ? 'Auto' : formatUSDC(Number(tx.amount))}
               </p>
               {tx.hash && /^0x[a-fA-F0-9]{64}$/.test(tx.hash) && (
                 <a

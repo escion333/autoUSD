@@ -5,6 +5,7 @@ import { useMotherVault } from '@/hooks/useMotherVault';
 import { useChainValidation } from '@/hooks/useChainValidation';
 import { formatUSDC } from '@/lib/utils/format';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
+import { TransactionConfirmModal } from '@/components/TransactionConfirmModal';
 
 interface WithdrawModalProps {
   isOpen: boolean;
@@ -16,7 +17,8 @@ export function WithdrawModal({ isOpen, onClose, onSuccess }: WithdrawModalProps
   const [amount, setAmount] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
-  const { withdraw, userPosition } = useMotherVault();
+  const [showConfirmation, setShowConfirmation] = useState(false);
+  const { withdraw, userPosition, vaultStats } = useMotherVault();
   const { isCorrectChain, chainName, switchChain, isChecking } = useChainValidation('base');
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -43,14 +45,22 @@ export function WithdrawModal({ isOpen, onClose, onSuccess }: WithdrawModalProps
       return;
     }
 
+    // Show confirmation modal
+    setShowConfirmation(true);
+  };
+
+  const handleConfirmWithdraw = async () => {
+    const withdrawAmount = parseFloat(amount);
     setIsLoading(true);
+    
     try {
       await withdraw(withdrawAmount);
+      setShowConfirmation(false);
       onSuccess();
       setAmount('');
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to withdraw');
+      throw err; // Let the confirmation modal handle the error
     } finally {
       setIsLoading(false);
     }
@@ -72,13 +82,14 @@ export function WithdrawModal({ isOpen, onClose, onSuccess }: WithdrawModalProps
   const totalEarnings = userPosition?.totalEarnings || 0;
 
   return (
+    <>
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg p-8 max-w-md w-full mx-4">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-2xl font-bold text-gray-900">Withdraw USDC</h2>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600"
+            className="text-gray-700 hover:text-gray-800"
             disabled={isLoading}
           >
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -91,17 +102,17 @@ export function WithdrawModal({ isOpen, onClose, onSuccess }: WithdrawModalProps
           {/* Balance Display */}
           <div className="mb-4 p-4 bg-gray-50 rounded-lg">
             <div className="flex justify-between items-center mb-2">
-              <span className="text-sm text-gray-600">Available Balance</span>
+              <span className="text-sm text-gray-700">Available Balance</span>
               <span className="text-lg font-bold text-gray-900">{formatUSDC(currentBalance)}</span>
             </div>
             <div className="flex justify-between items-center">
-              <span className="text-sm text-gray-600">Total Earnings</span>
+              <span className="text-sm text-gray-700">Total Earnings</span>
               <span className="text-sm font-medium text-green-600">+{formatUSDC(totalEarnings)}</span>
             </div>
           </div>
 
           <div className="mb-4">
-            <label htmlFor="amount" className="block text-sm font-medium text-gray-700 mb-2">
+            <label htmlFor="amount" className="block text-sm font-medium text-gray-900 mb-2">
               Amount to Withdraw
             </label>
             <div className="relative">
@@ -188,11 +199,28 @@ export function WithdrawModal({ isOpen, onClose, onSuccess }: WithdrawModalProps
             )}
           </button>
 
-          <p className="mt-4 text-center text-xs text-gray-500">
+          <p className="mt-4 text-center text-xs text-gray-700">
             Withdrawals are processed on Base L2 • No gas fees
           </p>
         </form>
       </div>
     </div>
+
+      {/* Transaction Confirmation Modal */}
+      <TransactionConfirmModal
+        isOpen={showConfirmation}
+        onClose={() => setShowConfirmation(false)}
+        onConfirm={handleConfirmWithdraw}
+        details={{
+          type: 'withdraw',
+          amount: parseFloat(amount) || 0,
+          currentBalance: userPosition?.balance || 0,
+          newBalance: (userPosition?.balance || 0) - (parseFloat(amount) || 0),
+          apy: vaultStats?.currentAPY || 0,
+          estimatedGas: 0, // Gasless
+          estimatedTime: '1-3 minutes',
+        }}
+      />
+    </>
   );
 }

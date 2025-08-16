@@ -4,6 +4,13 @@
 
 @layer base {
   :root {
+    /* DESIGN SYSTEM - Minimum contrast standards */
+    /* Text colors - WCAG AA compliant (4.5:1 minimum) */
+    --text-primary: #111827;    /* gray-900 - Main headings */
+    --text-secondary: #374151;  /* gray-700 - Body text (MINIMUM for white bg) */
+    --text-tertiary: #4B5563;   /* gray-600 - Supporting (use sparingly) */
+    --text-muted: #6B7280;      /* gray-500 - ONLY for disabled states */
+    
     --background: #ffffff;
     --foreground: #171717;
     --primary: #6366f1;
@@ -21,28 +28,6 @@
     --radius: 0.5rem;
   }
 
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --background: #0a0a0a;
-      --foreground: #ededed;
-      --primary: #818cf8;
-      --primary-foreground: #1e1b4b;
-      --secondary: #1f2937;
-      --secondary-foreground: #f9fafb;
-      --accent: #a5b4fc;
-      --accent-foreground: #1e1b4b;
-      --success: #4ade80;
-      --warning: #fbbf24;
-      --error: #f87171;
-      --border: #374151;
-      --input: #1f2937;
-      --ring: #a5b4fc;
-    }
-  }
-
-  * {
-    @apply border-border;
-  }
 
   body {
     @apply bg-background text-foreground antialiased;
@@ -60,15 +45,15 @@
   }
 
   .btn-secondary {
-    @apply btn bg-neutral-200 text-neutral-900 hover:bg-neutral-300 active:bg-neutral-400 dark:bg-neutral-800 dark:text-neutral-100 dark:hover:bg-neutral-700;
+    @apply btn bg-neutral-200 text-neutral-900 hover:bg-neutral-300 active:bg-neutral-400;
   }
 
   .btn-outline {
-    @apply btn border border-neutral-300 bg-transparent hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800;
+    @apply btn border border-neutral-300 bg-transparent hover:bg-neutral-100;
   }
 
   .btn-ghost {
-    @apply btn bg-transparent hover:bg-neutral-100 dark:hover:bg-neutral-800;
+    @apply btn bg-transparent hover:bg-neutral-100;
   }
 
   .btn-success {
@@ -80,7 +65,7 @@
   }
 
   .card {
-    @apply rounded-xl border bg-white p-6 shadow-sm dark:bg-neutral-900 dark:border-neutral-800;
+    @apply rounded-xl border bg-white p-6 shadow-sm;
   }
 
   .card-hover {
@@ -88,7 +73,7 @@
   }
 
   .input {
-    @apply flex h-10 w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-neutral-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-900 dark:placeholder:text-neutral-400;
+    @apply flex h-10 w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-neutral-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50;
   }
 
   .label {
@@ -100,31 +85,31 @@
   }
 
   .badge-primary {
-    @apply badge bg-primary-100 text-primary-800 dark:bg-primary-900 dark:text-primary-200;
+    @apply badge bg-primary-100 text-primary-800;
   }
 
   .badge-success {
-    @apply badge bg-success-100 text-success-800 dark:bg-success-900 dark:text-success-200;
+    @apply badge bg-success-100 text-success-800;
   }
 
   .badge-warning {
-    @apply badge bg-warning-100 text-warning-800 dark:bg-warning-900 dark:text-warning-200;
+    @apply badge bg-warning-100 text-warning-800;
   }
 
   .badge-error {
-    @apply badge bg-error-100 text-error-800 dark:bg-error-900 dark:text-error-200;
+    @apply badge bg-error-100 text-error-800;
   }
 
   .divider {
-    @apply my-4 h-px bg-neutral-200 dark:bg-neutral-800;
+    @apply my-4 h-px bg-neutral-200;
   }
 
   .skeleton {
-    @apply animate-pulse rounded-md bg-neutral-200 dark:bg-neutral-800;
+    @apply animate-pulse rounded-md bg-neutral-200;
   }
 
   .tooltip {
-    @apply absolute z-50 rounded-md bg-neutral-900 px-2 py-1 text-xs text-white shadow-lg dark:bg-neutral-100 dark:text-neutral-900;
+    @apply absolute z-50 rounded-md bg-neutral-900 px-2 py-1 text-xs text-white shadow-lg;
   }
 
   .modal-backdrop {
@@ -132,11 +117,11 @@
   }
 
   .modal {
-    @apply fixed left-[50%] top-[50%] z-50 w-full max-w-lg translate-x-[-50%] translate-y-[-50%] rounded-xl bg-white p-6 shadow-xl dark:bg-neutral-900;
+    @apply fixed left-[50%] top-[50%] z-50 w-full max-w-lg translate-x-[-50%] translate-y-[-50%] rounded-xl bg-white p-6 shadow-xl;
   }
 
   .progress-bar {
-    @apply h-2 w-full overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-800;
+    @apply h-2 w-full overflow-hidden rounded-full bg-neutral-200;
   }
 
   .progress-fill {
@@ -144,7 +129,7 @@
   }
 
   .spinner {
-    @apply h-5 w-5 animate-spin rounded-full border-2 border-neutral-300 border-t-primary-500 dark:border-neutral-700 dark:border-t-primary-400;
+    @apply h-5 w-5 animate-spin rounded-full border-2 border-neutral-300 border-t-primary-500;
   }
 
   .gradient-text {
@@ -201,7 +186,7 @@
   }
 
   .glass {
-    @apply backdrop-blur-md bg-white/70 dark:bg-neutral-900/70;
+    @apply backdrop-blur-md bg-white/70;
   }
 
   .glow {

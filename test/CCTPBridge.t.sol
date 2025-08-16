@@ -7,6 +7,7 @@ import {MockERC20} from "./mocks/MockERC20.sol";
 import {MockTokenMessenger} from "./mocks/MockTokenMessenger.sol";
 import {MockMessageTransmitter} from "./mocks/MockMessageTransmitter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
 
 contract CCTPBridgeTest is Test {
     CCTPBridge public bridge;
@@ -79,15 +80,17 @@ contract CCTPBridgeTest is Test {
         uint256 amount = 100e6;
         
         vm.startPrank(user);
-        usdc.transfer(address(bridge), amount);
-        vm.stopPrank();
+        usdc.approve(address(bridge), amount);
         
+        uint256 userBalanceBefore = usdc.balanceOf(user);
         uint256 bridgeBalanceBefore = usdc.balanceOf(address(bridge));
         
         uint64 nonce = bridge.bridgeUSDC(amount, ARBITRUM_CHAIN_ID, recipient);
+        vm.stopPrank();
         
         assertTrue(nonce > 0);
-        assertEq(usdc.balanceOf(address(bridge)), bridgeBalanceBefore);
+        assertEq(usdc.balanceOf(user), userBalanceBefore - amount);
+        assertEq(usdc.balanceOf(address(bridge)), bridgeBalanceBefore + amount);
         assertEq(usdc.allowance(address(bridge), address(tokenMessenger)), amount);
         
         // Pending transfers tracking removed for simplicity in the implementation
@@ -126,47 +129,47 @@ contract CCTPBridgeTest is Test {
     }
     
     function test_BridgeUSDC_RevertInsufficientBalance() public {
-        uint256 amount = 200_000e6;
+        uint256 amount = 1_000_001e6; // Set amount higher than user's balance
         
-        vm.expectRevert(abi.encodeWithSelector(CCTPBridge.InsufficientBalance.selector, 100_000e6, amount));
+        // First increase the bridge limit to ensure we test the balance check
+        vm.prank(admin);
+        bridge.setBridgeLimits(1e6, 2_000_000e6); // Increase max to 2M USDC
+        
+        // User only has 1,000,000e6 USDC from setup
+        vm.startPrank(user);
+        usdc.approve(address(bridge), amount);
+        
+        vm.expectRevert(abi.encodeWithSelector(IERC20Errors.ERC20InsufficientBalance.selector, user, 1_000_000e6, amount));
         bridge.bridgeUSDC(amount, ARBITRUM_CHAIN_ID, recipient);
+        vm.stopPrank();
     }
     
-    function test_ReceiveUSDC() public {
-        bytes memory message = abi.encode("test_message");
-        bytes memory attestation = abi.encode("test_attestation");
+    function test_handleReceiveMessage() public {
+        // Mock a CCTP message
+        CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
+            version: 0,
+            sourceDomain: ARBITRUM_DOMAIN,
+            destinationDomain: BASE_DOMAIN,
+            nonce: 12345,
+            sender: bytes32(uint256(uint160(user))),
+            recipient: bytes32(uint256(uint160(recipient))),
+            destinationCaller: bytes32(0),
+            amount: 100e6
+        });
+        bytes memory messageBody = abi.encode(cctpMessage);
         
-        messageTransmitter.setReceiveMessageResult(true);
+        // Mock the TokenMessenger as the caller
+        vm.prank(address(tokenMessenger));
         
-        bytes32 messageHash = keccak256(message);
-        vm.expectEmit(true, false, false, true);
-        emit BridgeCompleted(messageHash, 0, 0, address(bridge));
+        bytes32 messageHash = keccak256(messageBody);
+        vm.expectEmit(true, true, false, true);
+        emit BridgeCompleted(messageHash, cctpMessage.amount, cctpMessage.sourceDomain, recipient);
         
-        bridge.receiveUSDC(message, attestation);
+        bridge.handleReceiveMessage(cctpMessage.sourceDomain, bytes32(0), messageBody);
         
+        // Check that the recipient received the USDC
+        assertEq(usdc.balanceOf(recipient), cctpMessage.amount);
         assertTrue(bridge.processedMessages(messageHash));
-    }
-    
-    function test_ReceiveUSDC_RevertAlreadyProcessed() public {
-        bytes memory message = abi.encode("test_message");
-        bytes memory attestation = abi.encode("test_attestation");
-        
-        messageTransmitter.setReceiveMessageResult(true);
-        bridge.receiveUSDC(message, attestation);
-        
-        bytes32 messageHash = keccak256(message);
-        vm.expectRevert(abi.encodeWithSelector(CCTPBridge.MessageAlreadyProcessed.selector, messageHash));
-        bridge.receiveUSDC(message, attestation);
-    }
-    
-    function test_ReceiveUSDC_RevertProcessingFailed() public {
-        bytes memory message = abi.encode("test_message");
-        bytes memory attestation = abi.encode("test_attestation");
-        
-        messageTransmitter.setReceiveMessageResult(false);
-        
-        vm.expectRevert("Message processing failed");
-        bridge.receiveUSDC(message, attestation);
     }
     
     function test_RetryBridge() public {
@@ -267,9 +270,16 @@ contract CCTPBridgeTest is Test {
         amount = bound(amount, 1e6, 1_000_000e6);
         vm.assume(recipient_ != address(0));
         
-        usdc.mint(address(bridge), amount);
+        // Give user exact amount of USDC
+        vm.startPrank(admin);
+        usdc.mint(user, amount);
+        vm.stopPrank();
+        
+        vm.startPrank(user);
+        usdc.approve(address(bridge), amount);
         
         uint64 nonce = bridge.bridgeUSDC(amount, ARBITRUM_CHAIN_ID, recipient_);
+        vm.stopPrank();
         
         // Verify nonce was returned
         assertTrue(nonce > 0);

@@ -38,4 +38,9 @@ interface IKatanaRouter {
     ) external returns (uint256[] memory amounts);
 
     function WETH() external view returns (address);
+
+    function getAmountsOut(uint256 amountIn, address[] calldata path)
+        external
+        view
+        returns (uint256[] memory amounts);
 }

@@ -11,6 +11,10 @@ const config: Config = {
       colors: {
         background: "var(--background)",
         foreground: "var(--foreground)",
+        border: "var(--border)",
+        input: "var(--input)",
+        ring: "var(--ring)",
+        accent: "var(--accent)",
         primary: {
           50: "#eef2ff",
           100: "#e0e7ff",

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Circle SDK Direct Test</title>
+</head>
+<body>
+    <h1>Circle SDK Direct Test</h1>
+    <div>
+        <input type="email" id="email" placeholder="Enter email" />
+        <button onclick="testEmail()">Send OTP</button>
+    </div>
+    <div id="output" style="margin-top: 20px; padding: 10px; background: #f0f0f0;"></div>
+
+    <!-- Circle Web3 Services SDK -->
+    <script src="https://sdk.circle.com/sdk/v1/circle-programmable-wallets-sdk.js"></script>
+    <script>
+        // Use just the APP ID part
+        const APP_ID = '6ebcb0d4b03219ba9c3a7b9fd5c911a7';
+        
+        async function testEmail() {
+            const email = document.getElementById('email').value;
+            const output = document.getElementById('output');
+            
+            if (!email) {
+                output.innerHTML = '<p style="color: red;">Please enter an email</p>';
+                return;
+            }
+            
+            output.innerHTML = '<p>Testing with Circle SDK...</p>';
+            
+            try {
+                // Initialize SDK
+                const sdk = new window.W3SSdk();
+                
+                // Set app settings
+                output.innerHTML += '<p>Setting app ID...</p>';
+                await sdk.setAppSettings({ appId: APP_ID });
+                
+                // Send challenge
+                output.innerHTML += '<p>Sending email challenge...</p>';
+                const challengeId = await sdk.execute(sdk.challengeIdByEmail(email));
+                
+                output.innerHTML += `<p style="color: green;">✅ Success! Challenge ID: ${challengeId}</p>`;
+                output.innerHTML += '<p>Check your email for the OTP</p>';
+                
+                // Store for testing
+                window.challengeId = challengeId;
+                window.sdk = sdk;
+                
+            } catch (error) {
+                output.innerHTML += `<p style="color: red;">❌ Error: ${error.message}</p>`;
+                console.error('Full error:', error);
+                
+                // Try with the full key format
+                output.innerHTML += '<p>Trying alternative format...</p>';
+                try {
+                    const sdk2 = new window.W3SSdk();
+                    await sdk2.setAppSettings({ 
+                        appId: '6ebcb0d4b03219ba9c3a7b9fd5c911a7:5dd8672b95beb0f343c486ab5eeef79e' 
+                    });
+                    const challengeId = await sdk2.execute(sdk2.challengeIdByEmail(email));
+                    output.innerHTML += `<p style="color: green;">✅ Alternative format worked! Challenge ID: ${challengeId}</p>`;
+                } catch (error2) {
+                    output.innerHTML += `<p style="color: red;">❌ Alternative also failed: ${error2.message}</p>`;
+                }
+            }
+        }
+    </script>
+</body>
+</html>

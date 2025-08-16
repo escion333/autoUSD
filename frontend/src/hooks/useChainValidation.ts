@@ -145,7 +145,7 @@ export function useChainValidation(targetChain: string = 'base') {
 
       window.ethereum.on('chainChanged', handleChainChanged);
       return () => {
-        window.ethereum.removeListener('chainChanged', handleChainChanged);
+        window.ethereum?.removeListener('chainChanged', handleChainChanged);
       };
     }
   }, [checkChain]);

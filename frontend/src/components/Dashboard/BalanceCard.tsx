@@ -40,7 +40,7 @@ export function BalanceCard({
   return (
     <div className="bg-white rounded-xl shadow-sm p-6">
       <div className="flex justify-between items-start mb-2">
-        <h3 className="text-sm font-medium text-gray-500">{title}</h3>
+        <h3 className="text-sm font-medium text-gray-700">{title}</h3>
         {change !== 0 && !isCountdown && !hidePercent && (
           <span
             className={`text-xs font-medium px-2 py-1 rounded-full ${
@@ -66,7 +66,7 @@ export function BalanceCard({
       </div>
       
       {subtitle && (
-        <p className="text-xs text-gray-500 mt-2">{subtitle}</p>
+        <p className="text-xs text-gray-700 mt-2">{subtitle}</p>
       )}
     </div>
   );

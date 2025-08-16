@@ -23,7 +23,7 @@ export function LoadingSpinner({
         className={`${sizeClasses[size]} border-blue-200 border-t-blue-600 rounded-full animate-spin`}
       />
       {message && (
-        <p className="mt-3 text-sm text-gray-600">{message}</p>
+        <p className="mt-3 text-sm text-gray-700">{message}</p>
       )}
     </div>
   );

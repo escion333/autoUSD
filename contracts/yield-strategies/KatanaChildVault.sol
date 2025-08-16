@@ -2,10 +2,11 @@
 pragma solidity 0.8.23;
 
 import {ICrossChainMessenger} from "../interfaces/ICrossChainMessenger.sol";
+import {IMessageRecipient} from "../interfaces/Hyperlane/IMessageRecipient.sol";
+import {CCTPBridge} from "../core/CCTPBridge.sol";
 import {ReentrancyGuard} from "openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
 import {Pausable} from "openzeppelin-contracts/contracts/utils/Pausable.sol";
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
-import {SafeERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 import {AccessControl} from "openzeppelin-contracts/contracts/access/AccessControl.sol";
 
 import {IKatanaRouter} from "../interfaces/yield-strategies/IKatanaRouter.sol";
@@ -14,67 +15,141 @@ import {IKatanaPair} from "../interfaces/yield-strategies/IKatanaPair.sol";
 contract KatanaChildVault is
     ReentrancyGuard,
     Pausable,
-    AccessControl
+    AccessControl,
+    IMessageRecipient
 {
-    using SafeERC20 for IERC20;
 
     bytes32 public constant MESSENGER_ROLE = keccak256("MESSENGER_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+
+    
 
     address public usdc;
     address public weth;
     address public katanaRouter;
     address public katanaPair;
-    uint256 public totalValue; // Total value locked in the vault in USDC terms
-    uint256 public slippageBps; // Slippage tolerance in basis points (e.g., 50 for 0.5%)
+    uint256 public totalShares;
+    uint256 public slippageBps; 
 
     ICrossChainMessenger public crossChainMessenger;
+    CCTPBridge public cctpBridge;
+    address public motherVault;
+    uint32 public motherChainDomain;
+    uint256 public lastHarvestNav;
+    
+    // Security Enhancements
+    uint256 public minLiquidity = 1000e6; // Minimum 1000 USDC liquidity in pool
+    uint256 public maxDepositAmount = 100000e6; // Maximum 100,000 USDC deposit per tx
 
-    event Deposited(uint256 amount, uint256 liquidity);
-    event Withdrawn(uint256 amount, uint256 liquidity);
+    struct ApySnapshot {
+        uint256 timestamp;
+        uint256 nav;
+        uint256 shares;
+    }
+    ApySnapshot[] public apySnapshots;
+    uint256 public constant SNAPSHOT_INTERVAL = 1 days;
+    uint256 public constant APY_PRECISION = 1e18;
+
+    event Deposited(uint256 amount, uint256 sharesMinted);
+    event Withdrawn(uint256 amount, uint256 sharesBurned);
     event Harvested(uint256 profit);
+    event MotherVaultUpdated(address newMotherVault, uint32 newMotherChainDomain);
+    event SnapshotTaken(uint256 timestamp, uint256 nav, uint256 shares);
+    event ApyReported(uint256 apy);
+    event ProfitReported(uint256 profit);
+    event SecurityLimitsUpdated(uint256 minLiquidity, uint256 maxDepositAmount);
+    event EmergencyWithdrawal(uint256 usdcAmount, uint256 wethAmount);
+
 
     constructor(
         address _usdc,
         address _katanaRouter,
         address _katanaPair,
         address _crossChainMessenger,
+        address _cctpBridge,
         address _admin
     ) {
         usdc = _usdc;
         katanaRouter = _katanaRouter;
         katanaPair = _katanaPair;
         crossChainMessenger = ICrossChainMessenger(_crossChainMessenger);
+        cctpBridge = CCTPBridge(_cctpBridge);
         weth = IKatanaRouter(_katanaRouter).WETH();
-        slippageBps = 50; // Default to 0.5%
+        slippageBps = 50; 
 
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
         _grantRole(PAUSER_ROLE, _admin);
         _grantRole(MESSENGER_ROLE, _crossChainMessenger);
+        
+        uint256 initialNav = 1e6;
+        apySnapshots.push(ApySnapshot({
+            timestamp: block.timestamp,
+            nav: initialNav,
+            shares: 1e6 
+        }));
+        totalShares = 1e6;
+        lastHarvestNav = initialNav;
     }
 
-    function deposit(uint256 amount)
-        external
-        whenNotPaused
-        nonReentrant
-    {
-        // For now, only the messenger can deposit
+    function handle(
+        uint32 _origin,
+        bytes32 _sender,
+        bytes calldata _message
+    ) external payable whenNotPaused nonReentrant {
         require(
-            hasRole(MESSENGER_ROLE, msg.sender),
-            "Caller is not the messenger"
+            msg.sender == address(crossChainMessenger.getHyperlaneMailbox()),
+            "Only Hyperlane Mailbox"
+        );
+        require(
+            _origin == motherChainDomain,
+            "Only Mother Vault Chain"
+        );
+        require(
+            _sender == bytes32(uint256(uint160(motherVault))),
+            "Only Mother Vault"
         );
 
+        (ICrossChainMessenger.MessageType messageType, bytes memory data) = abi.decode(_message, (ICrossChainMessenger.MessageType, bytes));
+
+        if (messageType == ICrossChainMessenger.MessageType.DEPOSIT_REQUEST) {
+            uint256 amount = abi.decode(data, (uint256));
+            _handleDeposit(amount);
+        } else if (messageType == ICrossChainMessenger.MessageType.YIELD_REPORT) {
+            harvest();
+        } else if (messageType == ICrossChainMessenger.MessageType.REBALANCE_COMMAND) {
+            reportApy();
+        } else {
+            revert("Invalid message type");
+        }
+    }
+
+    function _handleDeposit(uint256 amount) internal {
+        require(amount <= maxDepositAmount, "Exceeds max deposit amount");
+        (uint112 reserve0, uint112 reserve1, ) = IKatanaPair(katanaPair).getReserves();
+        uint256 usdcReserve = IKatanaPair(katanaPair).token0() == usdc ? reserve0 : reserve1;
+        require(usdcReserve >= minLiquidity, "Insufficient liquidity in pool");
+
+        // Check that we have enough USDC to process the deposit
+        uint256 usdcBalance = IERC20(usdc).balanceOf(address(this));
+        require(usdcBalance >= amount, "Insufficient USDC received");
+
+        uint256 nav = _calculateNav();
+        uint256 sharesToMint;
+        if (totalShares == 0) {
+            sharesToMint = amount;
+        } else {
+            sharesToMint = (amount * totalShares) / nav;
+        }
+        totalShares += sharesToMint;
+        lastHarvestNav += amount;
 
         uint256 halfAmount = amount / 2;
-        IERC20(usdc).safeApprove(katanaRouter, 0);
-        IERC20(usdc).safeApprove(katanaRouter, halfAmount);
+        IERC20(usdc).approve(katanaRouter, halfAmount);
 
-        // --- SWAP ---
         address[] memory path = new address[](2);
         path[0] = usdc;
         path[1] = weth;
 
-        // Calculate minimum WETH to receive with slippage protection
         uint[] memory amountsOut = IKatanaRouter(katanaRouter).getAmountsOut(halfAmount, path);
         uint256 minWethOut = amountsOut[1] * (10000 - slippageBps) / 10000;
 
@@ -86,23 +161,15 @@ contract KatanaChildVault is
             block.timestamp
         );
 
-        // --- ADD LIQUIDITY ---
         uint256 wethBalance = IERC20(weth).balanceOf(address(this));
-        IERC20(usdc).safeApprove(katanaRouter, 0);
-        IERC20(usdc).safeApprove(katanaRouter, halfAmount);
-        IERC20(weth).safeApprove(katanaRouter, 0);
-        IERC20(weth).safeApprove(katanaRouter, wethBalance);
-
-        // Calculate minimum liquidity to receive with slippage protection
+        IERC20(usdc).approve(katanaRouter, halfAmount);
+        IERC20(weth).approve(katanaRouter, wethBalance);
+        
         uint256 usdcBalanceForLP = IERC20(usdc).balanceOf(address(this));
         uint256 minUsdcForLP = usdcBalanceForLP * (10000 - slippageBps) / 10000;
         uint256 minWethForLP = wethBalance * (10000 - slippageBps) / 10000;
 
-        (
-            uint256 amountA,
-            uint256 amountB,
-            uint256 liquidity
-        ) = IKatanaRouter(katanaRouter).addLiquidity(
+        IKatanaRouter(katanaRouter).addLiquidity(
                 usdc,
                 weth,
                 halfAmount,
@@ -113,8 +180,7 @@ contract KatanaChildVault is
                 block.timestamp
             );
 
-        totalValue += amount; // Approximation, more complex logic can be used for precision
-        emit Deposited(amount, liquidity);
+        emit Deposited(amount, sharesToMint);
     }
 
     function withdraw(uint256 amount)
@@ -122,24 +188,21 @@ contract KatanaChildVault is
         whenNotPaused
         nonReentrant
     {
-        require(
+         require(
             hasRole(MESSENGER_ROLE, msg.sender),
             "Caller is not the messenger"
         );
 
-        // --- REMOVE LIQUIDITY ---
-        // For simplicity, we withdraw a proportional amount of liquidity
-        uint256 liquidityToWithdraw = (amount *
-            IERC20(katanaPair).balanceOf(address(this))) / totalValue;
+        uint256 nav = _calculateNav();
+        uint256 sharesToBurn = (amount * totalShares) / nav;
+        totalShares -= sharesToBurn;
+        lastHarvestNav -= amount;
 
-        IERC20(katanaPair).safeApprove(katanaRouter, 0);
-        IERC20(katanaPair).safeApprove(katanaRouter, liquidityToWithdraw);
+        uint256 liquidityToWithdraw = (amount * IERC20(katanaPair).balanceOf(address(this))) / nav;
+        IERC20(katanaPair).approve(katanaRouter, liquidityToWithdraw);
 
-        // Calculate minimum amounts to receive with slippage protection
-        uint256 minUsdcOut = 0; // Will be calculated later based on pair reserves
-        uint256 minWethOut = 0;
-        // A more robust calculation would involve querying reserves and totalSupply from the pair
-        // For now, setting a baseline to prevent full slippage, but this can be improved.
+        uint256 minUsdcOut; 
+        uint256 minWethOut;
         (uint reserve0, uint reserve1, ) = IKatanaPair(katanaPair).getReserves();
         uint lpTotalSupply = IKatanaPair(katanaPair).totalSupply();
         if (IKatanaPair(katanaPair).token0() == usdc) {
@@ -150,23 +213,11 @@ contract KatanaChildVault is
             minWethOut = (liquidityToWithdraw * reserve0 / lpTotalSupply) * (10000 - slippageBps) / 10000;
         }
 
+        IKatanaRouter(katanaRouter).removeLiquidity(usdc, weth, liquidityToWithdraw, minUsdcOut, minWethOut, address(this), block.timestamp);
 
-        (uint256 usdcReceived, uint256 wethReceived) = IKatanaRouter(
-            katanaRouter
-        ).removeLiquidity(
-            usdc,
-            weth,
-            liquidityToWithdraw,
-            minUsdcOut,
-            minWethOut,
-            address(this),
-            block.timestamp
-        );
-
-        // --- SWAP WETH TO USDC ---
         uint256 usdcBalanceBeforeSwap = IERC20(usdc).balanceOf(address(this));
-        IERC20(weth).safeApprove(katanaRouter, 0);
-        IERC20(weth).safeApprove(katanaRouter, wethReceived);
+        uint256 wethReceived = IERC20(weth).balanceOf(address(this));
+        IERC20(weth).approve(katanaRouter, wethReceived);
         address[] memory path = new address[](2);
         path[0] = weth;
         path[1] = usdc;
@@ -174,86 +225,138 @@ contract KatanaChildVault is
         uint[] memory amountsOut = IKatanaRouter(katanaRouter).getAmountsOut(wethReceived, path);
         uint256 minUsdcFromSwap = amountsOut[1] * (10000 - slippageBps) / 10000;
 
-        IKatanaRouter(katanaRouter).swapExactTokensForTokens(
-            wethReceived,
-            minUsdcFromSwap,
-            path,
+        IKatanaRouter(katanaRouter).swapExactTokensForTokens(wethReceived, minUsdcFromSwap, path, address(this), block.timestamp);
+
+        uint256 usdcBalanceAfterSwap = IERC20(usdc).balanceOf(address(this));
+        uint256 totalUsdcToWithdraw = usdcBalanceAfterSwap - usdcBalanceBeforeSwap;
+
+        IERC20(usdc).approve(address(cctpBridge), totalUsdcToWithdraw);
+        cctpBridge.bridgeUSDC(totalUsdcToWithdraw, motherChainDomain, motherVault);
+
+        emit Withdrawn(amount, sharesToBurn);
+    }
+    
+    function emergencyWithdraw() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        uint256 lpBalance = IERC20(katanaPair).balanceOf(address(this));
+        IERC20(katanaPair).approve(katanaRouter, lpBalance);
+
+        (uint256 usdcAmount, uint256 wethAmount) = IKatanaRouter(katanaRouter).removeLiquidity(
+            usdc,
+            weth,
+            lpBalance,
+            0,
+            0,
             address(this),
             block.timestamp
         );
 
-        // Precisely calculate the total USDC to withdraw
-        uint256 usdcBalanceAfterSwap = IERC20(usdc).balanceOf(address(this));
-        uint256 totalUsdcToWithdraw = usdcBalanceAfterSwap - usdcBalanceBeforeSwap + usdcReceived;
-
-        // Send funds back to the messenger (placeholder for CCTP)
-        IERC20(usdc).safeTransfer(msg.sender, totalUsdcToWithdraw);
-
-        totalValue -= amount;
-        emit Withdrawn(amount, liquidityToWithdraw);
+        emit EmergencyWithdrawal(usdcAmount, wethAmount);
     }
 
-    function getVaultState()
-        external
-        view
-        returns (
-            uint256 _totalValue,
-            uint256 _usdcBalance,
-            uint256 _wethBalance,
-            uint256 _lpBalance
-        )
-    {
-        _totalValue = totalValue;
-        _usdcBalance = IERC20(usdc).balanceOf(address(this));
-        _wethBalance = IERC20(weth).balanceOf(address(this));
-        _lpBalance = IERC20(katanaPair).balanceOf(address(this));
+    function takeSnapshot() external onlyRole(MESSENGER_ROLE) {
+        require(block.timestamp >= apySnapshots[apySnapshots.length - 1].timestamp + SNAPSHOT_INTERVAL, "Snapshot interval not elapsed");
+        uint256 nav = _calculateNav();
+        apySnapshots.push(ApySnapshot({
+            timestamp: block.timestamp,
+            nav: nav,
+            shares: totalShares
+        }));
+        emit SnapshotTaken(block.timestamp, nav, totalShares);
     }
 
-    function harvest() external nonReentrant {
-        // For now, only the messenger can harvest
-        require(
-            hasRole(MESSENGER_ROLE, msg.sender),
-            "Caller is not the messenger"
-        );
-
-        // In a real scenario, this would involve more complex logic to realize profits
-        // from yield farming, such as claiming rewards and swapping them to USDC.
-        // For this simplified version, we'll calculate the current value of our LP tokens
-        // and consider any increase as profit.
-
-        (uint112 reserve0, uint112 reserve1, ) = IKatanaPair(katanaPair)
-            .getReserves();
+    function _calculateNav() public view returns (uint256) {
+        (uint112 reserve0, uint112 reserve1, ) = IKatanaPair(katanaPair).getReserves();
         uint256 lpTotalSupply = IKatanaPair(katanaPair).totalSupply();
         uint256 lpBalance = IERC20(katanaPair).balanceOf(address(this));
-
-        // Calculate the value of the LP tokens in terms of USDC
         uint256 valueOfLpInUsdc;
         if (IKatanaPair(katanaPair).token0() == usdc) {
             valueOfLpInUsdc = (lpBalance * reserve0 * 2) / lpTotalSupply;
         } else {
             valueOfLpInUsdc = (lpBalance * reserve1 * 2) / lpTotalSupply;
         }
+        return valueOfLpInUsdc;
+    }
 
-        if (valueOfLpInUsdc > totalValue) {
-            uint256 profit = valueOfLpInUsdc - totalValue;
-            totalValue = valueOfLpInUsdc; // Update total value to reflect profit
+    function getApy() public view returns (uint256) {
+        if (apySnapshots.length < 2) return 0;
+
+        ApySnapshot memory lastSnapshot = apySnapshots[apySnapshots.length - 1];
+        ApySnapshot memory firstSnapshot = apySnapshots[0];
+
+        uint256 navPerShareLast = (lastSnapshot.nav * APY_PRECISION) / lastSnapshot.shares;
+        uint256 navPerShareFirst = (firstSnapshot.nav * APY_PRECISION) / firstSnapshot.shares;
+
+        uint256 timeElapsed = lastSnapshot.timestamp - firstSnapshot.timestamp;
+        if (timeElapsed == 0) return 0;
+
+        uint256 rateOfReturn = (navPerShareLast * APY_PRECISION) / navPerShareFirst;
+        uint256 secondsInYear = 31536000;
+        uint256 yearlyFactor = (secondsInYear * APY_PRECISION) / timeElapsed;
+        uint256 apy = ((rateOfReturn - APY_PRECISION) * yearlyFactor * 100) / APY_PRECISION;
+
+        return apy;
+    }
+
+    function getVaultState() external view returns (uint256, uint256, uint256, uint256, uint256) {
+        return (_calculateNav(), IERC20(usdc).balanceOf(address(this)), IERC20(weth).balanceOf(address(this)), IERC20(katanaPair).balanceOf(address(this)), totalShares);
+    }
+
+    function harvest() public nonReentrant onlyRole(MESSENGER_ROLE) {
+        uint256 nav = _calculateNav();
+        uint256 profit = 0;
+        if (nav > lastHarvestNav) {
+            profit = nav - lastHarvestNav;
+            lastHarvestNav = nav;
             emit Harvested(profit);
-            // In a real implementation, we would send the profit back to the MotherVault
-            // For example: crossChainMessenger.send(motherVaultDomain, motherVaultAddress, profit);
+            
+            bytes memory payload = abi.encode(profit);
+            ICrossChainMessenger.CrossChainMessage memory message = ICrossChainMessenger.CrossChainMessage({
+                targetChainId: motherChainDomain,
+                targetVault: motherVault,
+                messageType: ICrossChainMessenger.MessageType.YIELD_REPORT,
+                payload: payload,
+                nonce: 0, 
+                timestamp: block.timestamp
+            });
+            uint256 fee = crossChainMessenger.estimateMessageFee(motherChainDomain);
+            crossChainMessenger.sendCrossChainMessage{value: fee}(message);
+            emit ProfitReported(profit);
         } else {
-            // No profit to harvest
             emit Harvested(0);
         }
     }
 
-    function getApy() external view returns (uint256) {
-        // APY calculation is complex and requires historical data.
-        // This is a placeholder and would need a more robust implementation.
-        return 500; // Represents 5.00%
+    function reportApy() public nonReentrant onlyRole(MESSENGER_ROLE) {
+        uint256 apy = getApy();
+        bytes memory payload = abi.encode(apy);
+        ICrossChainMessenger.CrossChainMessage memory message = ICrossChainMessenger.CrossChainMessage({
+                targetChainId: motherChainDomain,
+                targetVault: motherVault,
+                messageType: ICrossChainMessenger.MessageType.YIELD_REPORT,
+                payload: payload,
+                nonce: 0, 
+                timestamp: block.timestamp
+            });
+        uint256 fee = crossChainMessenger.estimateMessageFee(motherChainDomain);
+        crossChainMessenger.sendCrossChainMessage{value: fee}(message);
+        emit ApyReported(apy);
+    }
+    
+    function setMotherVault(address _motherVault, uint32 _motherChainDomain) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(_motherVault != address(0), "Invalid Mother Vault address");
+        motherVault = _motherVault;
+        motherChainDomain = _motherChainDomain;
+        emit MotherVaultUpdated(_motherVault, _motherChainDomain);
+    }
+    
+    function setSecurityLimits(uint256 _minLiquidity, uint256 _maxDepositAmount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        minLiquidity = _minLiquidity;
+        maxDepositAmount = _maxDepositAmount;
+        emit SecurityLimitsUpdated(_minLiquidity, _maxDepositAmount);
     }
 
     function setSlippage(uint256 _slippageBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(_slippageBps <= 500, "Slippage cannot exceed 5%"); // Cap slippage at 5%
+        require(_slippageBps <= 500, "Slippage cannot exceed 5%"); 
         slippageBps = _slippageBps;
     }
 

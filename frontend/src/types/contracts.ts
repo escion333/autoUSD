@@ -114,10 +114,13 @@ export interface UserPosition {
   assets: bigint;
   pendingWithdrawals: bigint;
   claimableAssets: bigint;
-  totalEarnings: bigint;
+  totalEarningsRaw: bigint; // Raw earnings in wei
   // UI-specific fields (derived from on-chain data)
   balance: number; // Current balance in USDC
   earnings24h: number; // Earnings in last 24 hours
+  deposited?: number; // Total amount deposited
+  totalEarnings?: number; // Total earnings in USDC
+  firstDepositDate?: Date; // Date of first deposit
 }
 
 export interface ChainAllocation {

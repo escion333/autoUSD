@@ -104,7 +104,7 @@ export function FernWidget({ onPurchaseComplete, defaultAmount = 100 }: FernWidg
   if (!user?.walletAddress) {
     return (
       <div className="bg-gray-50 rounded-lg p-8 text-center">
-        <p className="text-gray-600">Please sign in to purchase USDC</p>
+        <p className="text-gray-700">Please sign in to purchase USDC</p>
       </div>
     );
   }
@@ -164,7 +164,7 @@ export function FernWidget({ onPurchaseComplete, defaultAmount = 100 }: FernWidg
             Continue to Payment
           </button>
           
-          <p className="text-xs text-gray-500 text-center">
+          <p className="text-xs text-gray-700 text-center">
             Mock Fern widget for development • Real widget requires API key
           </p>
         </div>

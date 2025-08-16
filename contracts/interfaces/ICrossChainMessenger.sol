@@ -54,11 +54,11 @@ interface ICrossChainMessenger {
         uint32 origin,
         bytes32 sender,
         bytes calldata message
-    ) external;
+    ) external payable;
     
     function getMessageStatus(bytes32 messageId) external view returns (bool processed, bool success);
     
-    function estimateMessageFee(uint32 targetChainId, bytes calldata message) external view returns (uint256);
+    function estimateMessageFee(uint32 targetChainId) external view returns (uint256);
     
     function getHyperlaneMailbox() external view returns (address);
     

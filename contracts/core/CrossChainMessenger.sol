@@ -8,6 +8,7 @@ import {ICrossChainMessenger} from "../interfaces/ICrossChainMessenger.sol";
 import {IMessageRecipient} from "../interfaces/Hyperlane/IMessageRecipient.sol";
 import {IMailbox} from "../interfaces/Hyperlane/IMailbox.sol";
 import {IInterchainGasPaymaster} from "../interfaces/Hyperlane/IInterchainGasPaymaster.sol";
+import {IMotherVault} from "../interfaces/IMotherVault.sol";
 import {CCTPBridge} from "./CCTPBridge.sol";
 
 /**
@@ -56,6 +57,7 @@ contract CrossChainMessenger is
 
     // Events
     event TrustedSenderSet(uint32 indexed domain, bytes32 indexed sender);
+    event DomainConfigured(uint32 indexed chainId, uint32 domain);
     
     // Additional errors
     error MessageTooLarge(uint256 size);
@@ -160,14 +162,14 @@ contract CrossChainMessenger is
         uint32 _origin,
         bytes32 _sender,
         bytes calldata _message
-    ) external override(ICrossChainMessenger, IMessageRecipient) nonReentrant {
+    ) external payable override(ICrossChainMessenger, IMessageRecipient) nonReentrant {
         require(msg.sender == address(hyperlaneMailbox), "Only mailbox");
 
         // Verify trusted sender and domain
         if (!trustedDomains[_origin]) {
             revert UntrustedDomain(_origin);
         }
-        require(trustedSenders[_origin] == _sender, "Untrusted sender");
+        if (trustedSenders[_origin] != _sender) revert UntrustedSender(_sender);
 
         // Calculate message ID
         bytes32 messageId = keccak256(abi.encodePacked(_origin, _sender, _message));
@@ -203,11 +205,9 @@ contract CrossChainMessenger is
         bool success;
         bytes memory returnData;
         
-        try motherVault.call(
-            abi.encodeWithSignature("handleIncomingMessage(uint32,bytes32,bytes)", _origin, _sender, abi.encode(messageType, payload))
-        ) returns (bytes memory data) {
-            success = true;
-            returnData = data;
+        try IMotherVault(motherVault).handleIncomingMessage(_origin, _sender, abi.encode(messageType, payload)) {
+             success = true;
+             // No return data expected, so this block is empty
         } catch Error(string memory reason) {
             success = false;
             returnData = bytes(reason);
@@ -269,12 +269,10 @@ contract CrossChainMessenger is
     /**
      * @notice Estimate message fee
      * @param targetChainId Target chain ID
-     * @param message Message body
      * @return Estimated fee in wei
      */
     function estimateMessageFee(
-        uint32 targetChainId,
-        bytes calldata message
+        uint32 targetChainId
     ) external view override returns (uint256) {
         uint32 domain = chainToHyperlaneDomain[targetChainId];
         if (domain == 0) return 0;
@@ -320,6 +318,6 @@ contract CrossChainMessenger is
     function _configureDomain(uint256 chainId, uint32 domain) private {
         chainToHyperlaneDomain[chainId] = domain;
         hyperlaneDomainToChain[domain] = chainId;
-        emit DomainConfigured(chainId, domain);
+        emit DomainConfigured(uint32(chainId), domain);
     }
 }

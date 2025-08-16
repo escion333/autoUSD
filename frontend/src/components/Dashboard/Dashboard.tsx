@@ -1,16 +1,14 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect } from 'react';
 import { useMotherVault } from '@/hooks/useMotherVault';
-import { formatUSDC } from '@/lib/utils/format';
-import { BalanceCard } from './BalanceCard';
 import { APYChart } from './APYChart';
-import { AllocationPie } from './AllocationPie';
 import { TransactionHistory } from './TransactionHistory';
+import { DashboardSkeleton } from '@/components/LoadingStates';
+import { ErrorAlert } from '@/components/ErrorAlert';
 
 export function Dashboard() {
-  const { userPosition, vaultStats, isLoading, refetch } = useMotherVault();
-  const [selectedTimeframe, setSelectedTimeframe] = useState<'24h' | '7d' | '30d'>('7d');
+  const { userPosition, vaultStats, isLoading, error, refetch } = useMotherVault();
 
   useEffect(() => {
     // Refresh data every 30 seconds
@@ -21,10 +19,16 @@ export function Dashboard() {
     return () => clearInterval(interval);
   }, [refetch]); // Include refetch in dependencies
 
-  if (isLoading) {
+  if (isLoading && !userPosition) {
+    return <DashboardSkeleton />;
+  }
+
+  if (error && !userPosition) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <div className="max-w-md w-full">
+          <ErrorAlert error={error} onRetry={refetch} />
+        </div>
       </div>
     );
   }
@@ -32,103 +36,60 @@ export function Dashboard() {
   return (
     <div className="min-h-screen bg-gray-50 p-4 md:p-6 lg:p-8">
       <div className="max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">Your autoUSD Dashboard</h1>
-          <p className="text-gray-600 mt-2">
-            Earn optimized yields across multiple chains automatically
+        {/* Header - Simplified for MVP */}
+        <div className="mb-8 text-center">
+          <h1 className="text-4xl font-bold text-gray-900">
+            ${userPosition?.balance ? userPosition.balance.toFixed(2) : '0.00'}
+          </h1>
+          <p className="text-lg text-green-600 mt-2">
+            {userPosition?.earnings24h && userPosition.earnings24h > 0 ? (
+              <>+${userPosition.earnings24h.toFixed(2)} today 🎉</>
+            ) : (
+              'Start earning ~10% per year'
+            )}
           </p>
         </div>
 
-        {/* Main Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-          <BalanceCard
-            title="Total Balance"
-            amount={userPosition?.balance || 0}
-            change={userPosition?.earnings24h || 0}
-            changePercent={userPosition?.balance && userPosition.balance > 0 
-              ? ((userPosition?.earnings24h || 0) / userPosition.balance) * 100 
-              : 0}
-          />
-          
-          <BalanceCard
-            title="Total Earnings"
-            amount={userPosition?.totalEarnings || 0}
-            change={userPosition?.earnings24h || 0}
-            changePercent={0}
-            hidePercent
-          />
-          
-          <BalanceCard
-            title="Current APY"
-            amount={vaultStats?.currentAPY || 0}
-            isPercentage
-            subtitle={`${vaultStats?.totalValueLocked ? formatUSDC(vaultStats.totalValueLocked) : '$0'} TVL`}
-          />
-          
-          <BalanceCard
-            title="Next Rebalance"
-            amount={0}
-            isCountdown
-            subtitle={vaultStats?.lastRebalanceTime ? 
-              `Last: ${new Date(vaultStats.lastRebalanceTime).toLocaleDateString()}` : 
-              'No rebalances yet'
-            }
-          />
-        </div>
-
-        {/* Charts Row */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-          {/* APY Chart - 2 columns */}
-          <div className="lg:col-span-2">
-            <div className="bg-white rounded-xl shadow-sm p-6">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-lg font-semibold text-gray-900">APY Performance</h2>
-                <div className="flex gap-2">
-                  {(['24h', '7d', '30d'] as const).map((timeframe) => (
-                    <button
-                      key={timeframe}
-                      onClick={() => setSelectedTimeframe(timeframe)}
-                      className={`px-3 py-1 text-sm rounded-lg transition-colors ${
-                        selectedTimeframe === timeframe
-                          ? 'bg-blue-600 text-white'
-                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                      }`}
-                    >
-                      {timeframe}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <APYChart timeframe={selectedTimeframe} />
-            </div>
+        {/* Simplified Stats - MVP */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8 max-w-3xl mx-auto">
+          <div className="bg-white rounded-xl shadow-sm p-6 text-center">
+            <p className="text-sm text-gray-600 mb-1">This Week</p>
+            <p className="text-2xl font-bold text-green-600">
+              +${((userPosition?.earnings24h || 0) * 7).toFixed(2)}
+            </p>
           </div>
-
-          {/* Allocation Pie - 1 column */}
-          <div className="lg:col-span-1">
-            <div className="bg-white rounded-xl shadow-sm p-6">
-              <h2 className="text-lg font-semibold text-gray-900 mb-4">Chain Allocation</h2>
-              <AllocationPie vaultStats={vaultStats} />
-              <div className="mt-4 space-y-2">
-                {vaultStats?.chainAllocations && vaultStats.chainAllocations.length > 0 ? (
-                  vaultStats.chainAllocations.map((allocation) => (
-                    <div key={allocation.chainId} className="flex justify-between text-sm">
-                      <span className="text-gray-600">{allocation.name}</span>
-                      <span className="font-medium">{allocation.apy.toFixed(2)}% APY</span>
-                    </div>
-                  ))
-                ) : (
-                  <p className="text-sm text-gray-500 text-center">No chain allocations yet</p>
-                )}
-              </div>
-            </div>
+          
+          <div className="bg-white rounded-xl shadow-sm p-6 text-center">
+            <p className="text-sm text-gray-600 mb-1">Total Earned</p>
+            <p className="text-2xl font-bold text-gray-900">
+              ${typeof userPosition?.totalEarnings === 'number' 
+                ? userPosition.totalEarnings.toFixed(2) 
+                : '0.00'}
+            </p>
+          </div>
+          
+          <div className="bg-white rounded-xl shadow-sm p-6 text-center">
+            <p className="text-sm text-gray-600 mb-1">Annual Rate</p>
+            <p className="text-2xl font-bold text-blue-600">
+              ~{vaultStats?.currentAPY?.toFixed(0) || '10'}%
+            </p>
           </div>
         </div>
 
-        {/* Transaction History */}
-        <div className="bg-white rounded-xl shadow-sm p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Recent Transactions</h2>
-          <TransactionHistory />
+        {/* Simple Growth Chart - MVP */}
+        <div className="max-w-3xl mx-auto mb-8">
+          <div className="bg-white rounded-xl shadow-sm p-6">
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">Your Growth</h2>
+            <APYChart timeframe={'7d'} />
+          </div>
+        </div>
+
+        {/* Transaction History - Simplified */}
+        <div className="max-w-3xl mx-auto">
+          <div className="bg-white rounded-xl shadow-sm p-6">
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">Recent Activity</h2>
+            <TransactionHistory />
+          </div>
         </div>
       </div>
     </div>

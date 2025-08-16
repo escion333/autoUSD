@@ -27,7 +27,7 @@ contract MockCrossChainMessenger is ICrossChainMessenger {
     
     function handle(uint32 origin, bytes32 sender, bytes calldata message) external payable {}
     
-    function estimateMessageFee(uint32 targetChainId, bytes calldata message) external view returns (uint256) {
+    function estimateMessageFee(uint32 targetChainId) external view returns (uint256) {
         return 0;
     }
     
@@ -52,10 +52,25 @@ contract MockCrossChainMessenger is ICrossChainMessenger {
     }
 }
 
+contract MockCCTPBridge {
+    IERC20 public usdc;
+    
+    constructor(address _usdc) {
+        usdc = IERC20(_usdc);
+    }
+    
+    function bridgeUSDC(uint256 amount, uint256 destinationChainId, address recipient) external returns (uint64) {
+        // Simple mock: just transfer USDC from caller to this contract
+        usdc.transferFrom(msg.sender, address(this), amount);
+        return 1; // Return a dummy nonce
+    }
+}
+
 contract MotherVaultTest is Test {
     MotherVault public vault;
     MockUSDC public usdc;
     MockCrossChainMessenger public messenger;
+    MockCCTPBridge public cctpBridge;
     
     address public owner = address(this);
     address public alice = address(0x1);
@@ -73,13 +88,14 @@ contract MotherVaultTest is Test {
     function setUp() public {
         usdc = new MockUSDC();
         messenger = new MockCrossChainMessenger();
+        cctpBridge = new MockCCTPBridge(address(usdc));
         vault = new MotherVault(address(usdc), "autoUSD Vault", "aUSD");
         
         usdc.mint(owner, INITIAL_DEPOSIT);
         usdc.approve(address(vault), INITIAL_DEPOSIT);
         
-        // Use a dummy address for CCTP bridge since it's not used in these tests
-        vault.initialize(address(messenger), address(0x1234));
+        // Use the actual mock CCTP bridge
+        vault.initialize(address(messenger), address(cctpBridge));
         vault.setDepositCap(DEPOSIT_CAP);
         
         usdc.mint(alice, 5000 * ONE_USDC);

@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { CircleWalletService } from '@/lib/circle/wallet';
 import { useRouter } from 'next/navigation';
+import { toast } from 'react-hot-toast';
 
 interface AuthState {
   isAuthenticated: boolean;
@@ -60,13 +61,31 @@ export function useCircleAuth() {
     };
 
     checkSession();
-  }, []);
+  }, []); // Only run once on mount
 
   const login = useCallback(async (email: string) => {
     setPendingEmail(email);
     const walletService = CircleWalletService.getInstance();
     
-    // Initialize session and get challenge ID for OTP
+    // Check for existing session recovery
+    const recovered = await walletService.recoverSession(email);
+    if (recovered) {
+      const currentUser = await walletService.getCurrentUser();
+      if (currentUser) {
+        setAuthState({
+          isAuthenticated: true,
+          isLoading: false,
+          user: {
+            email: currentUser.email,
+            walletAddress: currentUser.wallets[0].address,
+          },
+        });
+        toast.success('Session recovered!');
+        return true;
+      }
+    }
+    
+    // Initialize new session
     const { challengeId: newChallengeId } = await walletService.initializeSession(email);
     setChallengeId(newChallengeId);
     
@@ -148,6 +167,9 @@ export function useCircleAuth() {
     const walletService = CircleWalletService.getInstance();
     const { challengeId: newChallengeId } = await walletService.initializeSession(pendingEmail);
     setChallengeId(newChallengeId);
+    setOtpAttempts(0);
+    setLastAttemptTime(0);
+    toast.success('New OTP code sent!');
     
     return true;
   }, [pendingEmail]);
@@ -171,5 +193,7 @@ export function useCircleAuth() {
     verifyOtp,
     resendOtp,
     logout,
+    pendingEmail,
+    isVerifying,
   };
 }

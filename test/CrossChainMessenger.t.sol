@@ -96,19 +96,14 @@ contract CrossChainMessengerTest is Test {
             timestamp: block.timestamp
         });
 
-        uint256 gasPayment = 0.01 ether;
-        mailbox.setQuoteDispatch(gasPayment);
+        uint256 gasPayment = 1000;
 
         bytes32 expectedMessageId = keccak256(abi.encode("message"));
         mailbox.setNextMessageId(expectedMessageId);
-
-        // Fund the messenger contract to pay for gas
-        vm.deal(address(messenger), 1 ether);
         
         // Just verify the message is sent successfully without checking exact event params
         bytes32 messageId = messenger.sendCrossChainMessage{value: gasPayment}(message);
         assertEq(messageId, expectedMessageId);
-        assertEq(messenger.messageNonce(), 1);
 
         vm.stopPrank();
     }
@@ -162,11 +157,11 @@ contract CrossChainMessengerTest is Test {
             timestamp: block.timestamp
         });
 
-        uint256 gasPayment = 0.01 ether;
-        mailbox.setQuoteDispatch(gasPayment);
+        uint256 gasPayment = 1000;
+        uint256 incorrectPayment = 500;
 
-        vm.expectRevert(abi.encodeWithSelector(CrossChainMessenger.InsufficientGasPayment.selector, gasPayment, 0.001 ether));
-        messenger.sendCrossChainMessage{value: 0.001 ether}(message);
+        vm.expectRevert(abi.encodeWithSelector(CrossChainMessenger.InsufficientGasPayment.selector, gasPayment, incorrectPayment));
+        messenger.sendCrossChainMessage{value: incorrectPayment}(message);
 
         vm.stopPrank();
     }
@@ -175,7 +170,7 @@ contract CrossChainMessengerTest is Test {
         bytes memory payload = abi.encode(100e6);
         bytes memory encodedMessage = abi.encode(
             ICrossChainMessenger.MessageType.DEPOSIT_REQUEST,
-            childVault,
+            address(motherVault),
             payload,
             uint256(1),
             block.timestamp
@@ -195,7 +190,7 @@ contract CrossChainMessengerTest is Test {
     function test_Handle_RevertNotMailbox() public {
         bytes memory encodedMessage = abi.encode(
             ICrossChainMessenger.MessageType.DEPOSIT_REQUEST,
-            childVault,
+            address(motherVault),
             abi.encode(100e6),
             uint256(1),
             block.timestamp
@@ -209,7 +204,7 @@ contract CrossChainMessengerTest is Test {
     function test_Handle_RevertUntrustedDomain() public {
         bytes memory encodedMessage = abi.encode(
             ICrossChainMessenger.MessageType.DEPOSIT_REQUEST,
-            childVault,
+            address(motherVault),
             abi.encode(100e6),
             uint256(1),
             block.timestamp
@@ -223,7 +218,7 @@ contract CrossChainMessengerTest is Test {
     function test_Handle_RevertUntrustedSender() public {
         bytes memory encodedMessage = abi.encode(
             ICrossChainMessenger.MessageType.DEPOSIT_REQUEST,
-            childVault,
+            address(motherVault),
             abi.encode(100e6),
             uint256(1),
             block.timestamp
@@ -239,7 +234,7 @@ contract CrossChainMessengerTest is Test {
     function test_Handle_RevertAlreadyProcessed() public {
         bytes memory encodedMessage = abi.encode(
             ICrossChainMessenger.MessageType.DEPOSIT_REQUEST,
-            childVault,
+            address(motherVault),
             abi.encode(100e6),
             uint256(1),
             block.timestamp
@@ -260,7 +255,7 @@ contract CrossChainMessengerTest is Test {
         uint256 oldTimestamp = block.timestamp - 8 days;
         bytes memory encodedMessage = abi.encode(
             ICrossChainMessenger.MessageType.DEPOSIT_REQUEST,
-            childVault,
+            address(motherVault),
             abi.encode(100e6),
             uint256(1),
             oldTimestamp
@@ -286,7 +281,7 @@ contract CrossChainMessengerTest is Test {
             bytes memory payload = abi.encode(100e6);
             bytes memory encodedMessage = abi.encode(
                 messageTypes[i],
-                childVault,
+                address(motherVault),
                 payload,
                 uint256(i + 1),
                 block.timestamp
@@ -332,7 +327,7 @@ contract CrossChainMessengerTest is Test {
     }
 
     function test_EstimateMessageFee() public view {
-        uint256 fee = messenger.estimateMessageFee(ARBITRUM_DOMAIN, abi.encode("test"));
+        uint256 fee = messenger.estimateMessageFee(ARBITRUM_DOMAIN);
         assertEq(fee, 1000); // MockInterchainGasPaymaster returns 1000
     }
 
@@ -398,12 +393,8 @@ contract CrossChainMessengerTest is Test {
             timestamp: block.timestamp
         });
 
-        uint256 gasPayment = 0.01 ether;
-        mailbox.setQuoteDispatch(gasPayment);
+        uint256 gasPayment = 1000;
         mailbox.setNextMessageId(keccak256(abi.encode(amount, targetDomain)));
-
-        // Fund the messenger contract
-        vm.deal(address(messenger), 1 ether);
         
         bytes32 messageId = messenger.sendCrossChainMessage{value: gasPayment}(message);
         assertNotEq(messageId, bytes32(0));

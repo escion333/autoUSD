@@ -2,7 +2,7 @@
 pragma solidity 0.8.23;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+// import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
@@ -16,7 +16,7 @@ import {IMessageReceiver} from "../interfaces/CCTP/IMessageReceiver.sol";
  * @dev Manages burn/mint operations and attestation verification for cross-chain USDC transfers
  */
 contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuard {
-    using SafeERC20 for IERC20;
+    // using SafeERC20 for IERC20;
 
     // Roles
 
@@ -151,7 +151,7 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
         uint256 amount,
         uint256 destinationChainId,
         address recipient
-    ) external nonReentrant whenNotPaused returns (uint64 nonce) {
+    ) external nonReentrant whenNotPaused virtual returns (uint64 nonce) {
         // Validate inputs
         if (amount < minBridgeAmount) revert AmountTooLow(amount);
         if (amount > maxBridgeAmount) revert AmountTooHigh(amount);
@@ -161,11 +161,10 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
         if (!supportedDomains[destinationDomain]) revert InvalidDomain(destinationDomain);
 
         // Pull USDC from the sender
-        usdc.safeTransferFrom(msg.sender, address(this), amount);
+        usdc.transferFrom(msg.sender, address(this), amount);
 
         // Approve TokenMessenger to burn USDC
-        usdc.safeApprove(address(tokenMessenger), 0);
-        usdc.safeApprove(address(tokenMessenger), amount);
+        usdc.approve(address(tokenMessenger), amount);
 
         // Convert recipient address to bytes32 (left-padded)
         bytes32 mintRecipient = bytes32(uint256(uint160(recipient)));
@@ -214,8 +213,7 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
         transferToRetry.retryCount++;
 
         // Re-approve and re-bridge
-        usdc.safeApprove(address(tokenMessenger), 0);
-        usdc.safeApprove(address(tokenMessenger), transferToRetry.amount);
+        usdc.approve(address(tokenMessenger), transferToRetry.amount);
         bytes32 mintRecipient = bytes32(uint256(uint160(transferToRetry.recipient)));
         
         uint64 newNonce = tokenMessenger.depositForBurn(
@@ -267,7 +265,7 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
         }
 
         // Transfer USDC to the intended recipient
-        usdc.safeTransfer(recipient, cctpMessage.amount);
+        usdc.transfer(recipient, cctpMessage.amount);
 
         emit BridgeCompleted(messageHash, cctpMessage.amount, sourceDomain, recipient);
     }
@@ -348,7 +346,7 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
         address to,
         uint256 amount
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        usdc.safeTransfer(to, amount);
+        usdc.transfer(to, amount);
     }
 
     /**

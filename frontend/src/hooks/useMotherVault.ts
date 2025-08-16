@@ -4,11 +4,13 @@ import { useState, useEffect, useCallback } from 'react';
 import { UserPosition, VaultStats } from '@/types/contracts';
 import { MockMotherVault } from '@/lib/mocks/MockMotherVault';
 import { useCircleAuth } from './useCircleAuth';
+import { getUserFriendlyError } from '@/lib/utils/errors';
 
 export function useMotherVault() {
   const [userPosition, setUserPosition] = useState<UserPosition | null>(null);
   const [vaultStats, setVaultStats] = useState<VaultStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
   const { user } = useCircleAuth();
 
   const mockVault = MockMotherVault.getInstance();
@@ -18,24 +20,27 @@ export function useMotherVault() {
       setUserPosition(null);
       setVaultStats(null);
       setIsLoading(false);
+      setError(null);
       return;
     }
 
     try {
       setIsLoading(true);
+      setError(null);
       
       // Fetch user position and vault stats in parallel
       const [position, stats] = await Promise.all([
-        mockVault.getUserPosition(user.walletAddress),
+        mockVault.getUserPosition(user.walletAddress as `0x${string}`),
         mockVault.getVaultStats()
       ]);
       
       setUserPosition(position);
       setVaultStats(stats);
-    } catch (error) {
-      console.error('Failed to fetch vault data:', error);
+    } catch (err) {
+      console.error('Failed to fetch vault data:', err);
+      const errorObj = err instanceof Error ? err : new Error('Failed to fetch vault data');
+      setError(errorObj);
       // Don't clear data on error to allow retry with existing data visible
-      // Only clear loading state to allow user to retry
     } finally {
       setIsLoading(false);
     }
@@ -51,7 +56,9 @@ export function useMotherVault() {
     }
     
     try {
-      const txHash = await mockVault.deposit(amount, user.walletAddress);
+      // Convert amount to BigInt (assuming 6 decimals for USDC)
+      const amountBigInt = BigInt(Math.floor(amount * 1e6));
+      const txHash = await mockVault.deposit(amountBigInt, user.walletAddress as `0x${string}`);
       await fetchData(); // Refresh data after deposit
       return txHash;
     } catch (error) {
@@ -66,12 +73,15 @@ export function useMotherVault() {
     }
     
     try {
-      const txHash = await mockVault.withdraw(amount, user.walletAddress, user.walletAddress);
+      // Convert amount to BigInt (assuming 6 decimals for USDC)
+      const amountBigInt = BigInt(Math.floor(amount * 1e6));
+      const txHash = await mockVault.withdraw(amountBigInt, user.walletAddress as `0x${string}`, user.walletAddress as `0x${string}`);
       await fetchData(); // Refresh data after withdrawal
       return txHash;
-    } catch (error) {
-      console.error('Withdraw failed:', error);
-      throw error;
+    } catch (err) {
+      console.error('Withdraw failed:', err);
+      const message = getUserFriendlyError(err);
+      throw new Error(message);
     }
   }, [user?.walletAddress, fetchData]);
 
@@ -79,6 +89,7 @@ export function useMotherVault() {
     userPosition,
     vaultStats,
     isLoading,
+    error,
     deposit,
     withdraw,
     refetch: fetchData,

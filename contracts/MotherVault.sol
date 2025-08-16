@@ -415,7 +415,7 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
             timestamp: block.timestamp
         });
         
-        uint256 fee = crossChainMessenger.estimateMessageFee(domainId, abi.encode(crossChainMsg));
+        uint256 fee = crossChainMessenger.estimateMessageFee(domainId);
         bytes32 messageId = crossChainMessenger.sendCrossChainMessage{value: fee}(crossChainMsg);
         
         emit FundsDeployedToChild(domainId, amount, messageId);
@@ -431,7 +431,7 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
             timestamp: block.timestamp
         });
         
-        uint256 fee = crossChainMessenger.estimateMessageFee(domainId, abi.encode(crossChainMsg));
+        uint256 fee = crossChainMessenger.estimateMessageFee(domainId);
         bytes32 messageId = crossChainMessenger.sendCrossChainMessage{value: fee}(crossChainMsg);
         
         emit WithdrawalRequestSent(domainId, amount, messageId);
@@ -459,7 +459,7 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
         }
     }
     
-    function handleCCTPReceive(uint256 amount, uint32 sourceDomain, bytes32 sender) 
+    function handleCCTPReceive(uint256 amount, uint32 sourceDomain, bytes32 /*sender*/) 
         external 
         override 
     {

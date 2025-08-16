@@ -5,6 +5,7 @@ import { useMotherVault } from '@/hooks/useMotherVault';
 import { useChainValidation } from '@/hooks/useChainValidation';
 import { formatUSDC } from '@/lib/utils/format';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
+import { TransactionConfirmModal } from '@/components/TransactionConfirmModal';
 
 interface DepositModalProps {
   isOpen: boolean;
@@ -18,7 +19,8 @@ export function DepositModal({ isOpen, onClose, onSuccess }: DepositModalProps) 
   const [amount, setAmount] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
-  const { deposit, userPosition } = useMotherVault();
+  const [showConfirmation, setShowConfirmation] = useState(false);
+  const { deposit, userPosition, vaultStats } = useMotherVault();
   const { isCorrectChain, chainName, switchChain, isChecking } = useChainValidation('base');
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -44,23 +46,30 @@ export function DepositModal({ isOpen, onClose, onSuccess }: DepositModalProps) 
       return;
     }
 
-    setIsLoading(true);
-    try {
-      // Re-check balance at time of deposit to prevent race conditions
-      const currentBalance = userPosition?.balance || 0;
-      if (currentBalance + depositAmount > DEPOSIT_CAP) {
-        const remainingCap = Math.max(0, DEPOSIT_CAP - currentBalance);
-        setError(`You can only deposit ${formatUSDC(remainingCap)} more (${formatUSDC(DEPOSIT_CAP)} total cap)`);
-        setIsLoading(false);
-        return;
-      }
+    // Re-check balance at time of deposit to prevent race conditions
+    const currentBalance = userPosition?.balance || 0;
+    if (currentBalance + depositAmount > DEPOSIT_CAP) {
+      const remainingCap = Math.max(0, DEPOSIT_CAP - currentBalance);
+      setError(`You can only deposit ${formatUSDC(remainingCap)} more (${formatUSDC(DEPOSIT_CAP)} total cap)`);
+      return;
+    }
 
+    // Show confirmation modal
+    setShowConfirmation(true);
+  };
+
+  const handleConfirmDeposit = async () => {
+    const depositAmount = parseFloat(amount);
+    setIsLoading(true);
+    
+    try {
       await deposit(depositAmount);
+      setShowConfirmation(false);
       onSuccess();
       setAmount('');
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to deposit');
+      throw err; // Let the confirmation modal handle the error
     } finally {
       setIsLoading(false);
     }
@@ -78,13 +87,14 @@ export function DepositModal({ isOpen, onClose, onSuccess }: DepositModalProps) 
   const remainingCap = Math.max(0, DEPOSIT_CAP - currentBalance);
 
   return (
+    <>
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg p-8 max-w-md w-full mx-4">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-2xl font-bold text-gray-900">Deposit USDC</h2>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600"
+            className="text-gray-700 hover:text-gray-800"
             disabled={isLoading}
           >
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -95,7 +105,7 @@ export function DepositModal({ isOpen, onClose, onSuccess }: DepositModalProps) 
 
         <form onSubmit={handleSubmit}>
           <div className="mb-4">
-            <label htmlFor="amount" className="block text-sm font-medium text-gray-700 mb-2">
+            <label htmlFor="amount" className="block text-sm font-medium text-gray-900 mb-2">
               Amount (USDC)
             </label>
             <div className="relative">
@@ -121,7 +131,7 @@ export function DepositModal({ isOpen, onClose, onSuccess }: DepositModalProps) 
                 MAX
               </button>
             </div>
-            <div className="mt-2 flex justify-between text-sm text-gray-600">
+            <div className="mt-2 flex justify-between text-sm text-gray-700">
               <span>Available to deposit:</span>
               <span className="font-medium">{formatUSDC(remainingCap)}</span>
             </div>
@@ -141,19 +151,19 @@ export function DepositModal({ isOpen, onClose, onSuccess }: DepositModalProps) 
               <h3 className="text-sm font-medium text-gray-900 mb-2">Expected Returns</h3>
               <div className="space-y-1">
                 <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">Daily (at 10% APY):</span>
+                  <span className="text-gray-700">Daily (at 10% APY):</span>
                   <span className="font-medium">
                     {formatUSDC(parseFloat(amount) * 0.1 / 365)}
                   </span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">Monthly (at 10% APY):</span>
+                  <span className="text-gray-700">Monthly (at 10% APY):</span>
                   <span className="font-medium">
                     {formatUSDC(parseFloat(amount) * 0.1 / 12)}
                   </span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">Yearly (at 10% APY):</span>
+                  <span className="text-gray-700">Yearly (at 10% APY):</span>
                   <span className="font-medium">
                     {formatUSDC(parseFloat(amount) * 0.1)}
                   </span>
@@ -199,11 +209,28 @@ export function DepositModal({ isOpen, onClose, onSuccess }: DepositModalProps) 
             )}
           </button>
 
-          <p className="mt-4 text-center text-xs text-gray-500">
+          <p className="mt-4 text-center text-xs text-gray-700">
             No gas fees required • Powered by Circle
           </p>
         </form>
       </div>
     </div>
+
+      {/* Transaction Confirmation Modal */}
+      <TransactionConfirmModal
+        isOpen={showConfirmation}
+        onClose={() => setShowConfirmation(false)}
+        onConfirm={handleConfirmDeposit}
+        details={{
+          type: 'deposit',
+          amount: parseFloat(amount) || 0,
+          currentBalance: userPosition?.balance || 0,
+          newBalance: (userPosition?.balance || 0) + (parseFloat(amount) || 0),
+          apy: vaultStats?.currentAPY || 0,
+          estimatedGas: 0, // Gasless
+          estimatedTime: '30 seconds',
+        }}
+      />
+    </>
   );
 }

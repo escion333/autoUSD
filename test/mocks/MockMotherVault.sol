@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
+import {ICrossChainMessenger} from "../../contracts/interfaces/ICrossChainMessenger.sol";
+
 contract MockMotherVault {
     event DepositFromChild(address vault, bytes payload);
     event WithdrawalToChild(address vault, bytes payload);
@@ -9,6 +11,23 @@ contract MockMotherVault {
     event EmergencyPause(address vault);
     event EmergencyUnpause(address vault);
     event EmergencyWithdrawAll(address vault, bytes payload);
+    event IncomingMessageHandled(uint32 origin, bytes32 sender, bytes message);
+    event RebalanceInitiated(uint32 sourceChainId, uint32 targetChainId, uint256 amount);
+
+    bool public rebalanceInitiated;
+
+    function handleIncomingMessage(uint32 origin, bytes32 sender, bytes calldata message) external {
+        emit IncomingMessageHandled(origin, sender, message);
+        
+        (ICrossChainMessenger.MessageType messageType, bytes memory payload) = abi.decode(message, (ICrossChainMessenger.MessageType, bytes));
+        
+        // Minimal routing logic for mock
+        if (messageType == ICrossChainMessenger.MessageType.DEPOSIT_REQUEST) {
+            // Do nothing, just succeed
+        } else if (messageType == ICrossChainMessenger.MessageType.WITHDRAWAL_REQUEST) {
+            // Do nothing, just succeed
+        }
+    }
 
     function handleDepositFromChild(address vault, bytes calldata payload) external returns (bytes memory) {
         emit DepositFromChild(vault, payload);
@@ -43,5 +62,10 @@ contract MockMotherVault {
     function handleEmergencyWithdrawAll(address vault, bytes calldata payload) external returns (bytes memory) {
         emit EmergencyWithdrawAll(vault, payload);
         return abi.encode(true);
+    }
+
+    function initiateRebalance(uint32 sourceChainId, uint32 targetChainId, uint256 amount) external {
+        rebalanceInitiated = true;
+        emit RebalanceInitiated(sourceChainId, targetChainId, amount);
     }
 }

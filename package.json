@@ -4,6 +4,10 @@
   "description": "Cross-chain USDC yield optimizer",
   "private": true,
   "scripts": {
+    "dev": "cd frontend && npm run dev",
+    "frontend:dev": "cd frontend && npm run dev",
+    "frontend:build": "cd frontend && npm run build",
+    "frontend:install": "cd frontend && npm install",
     "compile": "forge build",
     "test": "forge test",
     "test:unit": "forge test --match-path test/unit/*",
