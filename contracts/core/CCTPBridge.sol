@@ -102,6 +102,18 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
     error InvalidRecipient(address recipient);
     error InsufficientBalance(uint256 balance, uint256 required);
 
+    // CCTP message format, see https://developers.circle.com/stablecoins/docs/cctp-technical-reference#message
+    struct CCTPMessage {
+        uint32 version;
+        uint32 sourceDomain;
+        uint32 destinationDomain;
+        uint64 nonce;
+        bytes32 sender;
+        bytes32 recipient;
+        bytes32 destinationCaller;
+        uint256 amount;
+    }
+
     constructor(
         address _tokenMessenger,
         address _messageTransmitter,
@@ -152,7 +164,8 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
         usdc.safeTransferFrom(msg.sender, address(this), amount);
 
         // Approve TokenMessenger to burn USDC
-        usdc.safeIncreaseAllowance(address(tokenMessenger), amount);
+        usdc.safeApprove(address(tokenMessenger), 0);
+        usdc.safeApprove(address(tokenMessenger), amount);
 
         // Convert recipient address to bytes32 (left-padded)
         bytes32 mintRecipient = bytes32(uint256(uint160(recipient)));
@@ -193,6 +206,7 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
             );
         }
         if (transferToRetry.retryCount >= MAX_RETRY_COUNT) {
+            emit BridgeFailed(nonce);
             revert MaxRetriesExceeded(nonce);
         }
 
@@ -200,7 +214,8 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
         transferToRetry.retryCount++;
 
         // Re-approve and re-bridge
-        usdc.safeIncreaseAllowance(address(tokenMessenger), transferToRetry.amount);
+        usdc.safeApprove(address(tokenMessenger), 0);
+        usdc.safeApprove(address(tokenMessenger), transferToRetry.amount);
         bytes32 mintRecipient = bytes32(uint256(uint160(transferToRetry.recipient)));
         
         uint64 newNonce = tokenMessenger.depositForBurn(
@@ -225,56 +240,47 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
      * @param message Message bytes from source chain
      * @param attestation Attestation from Circle's attestation service
      */
-    function receiveUSDC(
-        bytes calldata message,
-        bytes calldata attestation
-    ) external nonReentrant whenNotPaused {
-        bytes32 messageHash = keccak256(message);
-        if (processedMessages[messageHash]) revert MessageAlreadyProcessed(messageHash);
-
-        (bool success, ) = address(messageTransmitter).call(
-            abi.encodeWithSignature("receiveMessage(bytes,bytes)", message, attestation)
-        );
-        require(success, "Message processing failed");
-        
-        processedMessages[messageHash] = true;
-    }
-
+    /**
+     * @notice Handles a message received from the CCTP TokenMessenger
+     * @dev This function is called by the TokenMessenger after a successful cross-chain transfer.
+     * @param sourceDomain The CCTP domain from which the message originated.
+     * @param messageBody The raw bytes of the CCTP message.
+     */
     function handleReceiveMessage(
         uint32 sourceDomain,
         bytes32, /* remoteTokenMessenger */
-        bytes calldata message
+        bytes calldata messageBody
     ) external nonReentrant whenNotPaused {
         require(msg.sender == address(tokenMessenger), "Only TokenMessenger");
+        require(supportedDomains[sourceDomain], "Unsupported source domain");
 
-        bytes32 messageHash = keccak256(message);
+        bytes32 messageHash = keccak256(messageBody);
         if (processedMessages[messageHash]) revert MessageAlreadyProcessed(messageHash);
         processedMessages[messageHash] = true;
 
-        (address recipient, uint256 amount, bytes32 sender) = _parseCCTPMessage(message);
+        CCTPMessage memory cctpMessage = _parseCCTPMessage(messageBody);
+        address recipient = address(uint160(uint256(cctpMessage.recipient)));
 
         // Clear pending transfer if it exists
-        uint64 nonce = _extractNonceFromMessage(message);
-        if (pendingTransfers[nonce].timestamp != 0) {
-            delete pendingTransfers[nonce];
+        if (pendingTransfers[cctpMessage.nonce].timestamp != 0) {
+            delete pendingTransfers[cctpMessage.nonce];
         }
 
         // Transfer USDC to the intended recipient
-        usdc.safeTransfer(recipient, amount);
+        usdc.safeTransfer(recipient, cctpMessage.amount);
 
-        emit BridgeCompleted(messageHash, amount, sourceDomain, recipient);
+        emit BridgeCompleted(messageHash, cctpMessage.amount, sourceDomain, recipient);
     }
     
+    /**
+     * @notice Parses a raw CCTP message into a structured format.
+     * @param message The raw bytes of the CCTP message.
+     * @return A CCTPMessage struct.
+     */
     function _parseCCTPMessage(
         bytes calldata message
-    ) private pure returns (address recipient, uint256 amount, bytes32 sender) {
-        recipient = abi.decode(message[76:108], (address));
-        amount = abi.decode(message[108:140], (uint256));
-        sender = abi.decode(message[44:76], (bytes32));
-    }
-
-    function _extractNonceFromMessage(bytes calldata message) private pure returns (uint64) {
-        return abi.decode(message[8:16], (uint64));
+    ) private pure returns (CCTPMessage memory) {
+        return abi.decode(message, (CCTPMessage));
     }
 
 

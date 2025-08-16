@@ -241,6 +241,7 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
         
         shares = previewWithdraw(assets);
         
+        // Effects: State changes are made before the external call to prevent reentrancy.
         if (msg.sender != owner) {
             _spendAllowance(owner, msg.sender, shares);
         }
@@ -248,6 +249,7 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
         _burn(owner, shares);
         _totalIdle -= assets;
         
+        // Interactions: External call to transfer USDC
         USDC.safeTransfer(receiver, assets);
         
         emit Withdraw(msg.sender, receiver, owner, assets, shares);
@@ -267,6 +269,7 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
         
         assets = previewRedeem(shares);
         
+        // Effects: State changes are made before the external call to prevent reentrancy.
         if (msg.sender != owner) {
             _spendAllowance(owner, msg.sender, shares);
         }
@@ -274,6 +277,7 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
         _burn(owner, shares);
         _totalIdle -= assets;
         
+        // Interactions: External call to transfer USDC
         USDC.safeTransfer(receiver, assets);
         
         emit Withdraw(msg.sender, receiver, owner, assets, shares);
@@ -392,7 +396,10 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
     function _deployToChild(uint32 domainId, uint256 amount) private {
         _totalIdle -= amount;
         
-        USDC.forceApprove(address(cctpBridge), amount);
+        // Approve CCTP bridge to spend USDC for this transaction
+        // Resetting allowance to 0 first is a safety measure against some exploits
+        USDC.approve(address(cctpBridge), 0);
+        USDC.approve(address(cctpBridge), amount);
         
         cctpBridge.bridgeUSDC(amount, domainId, _childVaults[domainId].vaultAddress);
         
@@ -436,6 +443,10 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
     {
         require(msg.sender == address(crossChainMessenger), "Only messenger");
         require(_childVaults[origin].isActive, "Unknown origin");
+        
+        // Authenticate the original sender from the source chain
+        bytes32 expectedSender = bytes32(uint256(uint160(_childVaults[origin].vaultAddress)));
+        require(sender == expectedSender, "Untrusted sender for origin");
         
         // Process yield reports and other messages from child vaults
         (uint8 messageType, bytes memory payload) = abi.decode(message, (uint8, bytes));
@@ -513,7 +524,10 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
         uint256 timeSinceLastCollection = block.timestamp - _lastFeeCollection;
         uint256 totalManagedAssets = totalAssets();
         
-        feeAmount = (totalManagedAssets * managementFeeBps * timeSinceLastCollection) / (FEE_DIVISOR * 365 days);
+        // Fee is calculated as an annual percentage rate (APR).
+        // fee = assets * (feeBps / 10000) * (time / seconds_in_year)
+        uint256 SECONDS_PER_YEAR = 365 days;
+        feeAmount = (totalManagedAssets * managementFeeBps * timeSinceLastCollection) / (FEE_DIVISOR * SECONDS_PER_YEAR);
         
         if (feeAmount > 0 && feeAmount <= _totalIdle) {
             _totalIdle -= feeAmount;

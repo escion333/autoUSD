@@ -41,7 +41,6 @@ contract CrossChainMessenger is
     // Message tracking
     mapping(bytes32 => bool) public processedMessages;
     mapping(bytes32 => MessageStatus) public messageStatuses;
-    uint256 public messageNonce;
 
     struct MessageStatus {
         bool processed;
@@ -55,15 +54,8 @@ contract CrossChainMessenger is
     uint256 public constant MAX_MESSAGE_SIZE = 10_000; // bytes
     uint256 public constant MESSAGE_EXPIRY = 7 days;
 
-    // Retry mechanism
-    mapping(bytes32 => uint8) public messageRetryCount;
-    uint256 public constant MAX_RETRIES = 3;
-    uint256 public constant RETRY_DELAY = 1 hours;
-
     // Events
     event TrustedSenderSet(uint32 indexed domain, bytes32 indexed sender);
-    event DomainConfigured(uint256 indexed chainId, uint32 indexed domain);
-    event MessageRetried(bytes32 indexed messageId, uint8 retryCount);
     
     // Additional errors
     error MessageTooLarge(uint256 size);
@@ -134,10 +126,9 @@ contract CrossChainMessenger is
         // Convert target address to bytes32
         bytes32 recipientAddress = bytes32(uint256(uint160(message.targetVault)));
 
-        // Quote gas payment
+        // Quote and check gas payment
         uint256 gasPayment = gasPaymaster.quoteGasPayment(hyperlaneDomain, DEFAULT_GAS_LIMIT);
-
-        if (msg.value < gasPayment) {
+        if (msg.value != gasPayment) {
             revert InsufficientGasPayment(gasPayment, msg.value);
         }
 
@@ -149,25 +140,14 @@ contract CrossChainMessenger is
         );
 
         // Pay for gas
-        if (gasPayment > 0) {
-            gasPaymaster.payForGas{value: gasPayment}(
-                messageId,
-                hyperlaneDomain,
-                DEFAULT_GAS_LIMIT,
-                msg.sender
-            );
-        }
-
-        // Track message
-        messageNonce++;
+        gasPaymaster.payForGas{value: gasPayment}(
+            messageId,
+            hyperlaneDomain,
+            DEFAULT_GAS_LIMIT,
+            msg.sender
+        );
         
         emit MessageSent(message.targetChainId, message.messageType, messageId, message.nonce);
-
-        // Refund excess gas payment
-        if (msg.value > gasPayment) {
-            (bool refundSuccess, ) = msg.sender.call{value: msg.value - gasPayment}("");
-            require(refundSuccess, "Refund failed");
-        }
     }
 
     /**
@@ -180,30 +160,19 @@ contract CrossChainMessenger is
         uint32 _origin,
         bytes32 _sender,
         bytes calldata _message
-    ) external payable override(ICrossChainMessenger, IMessageRecipient) nonReentrant {
-        // Only Hyperlane mailbox can call this
+    ) external override(ICrossChainMessenger, IMessageRecipient) nonReentrant {
         require(msg.sender == address(hyperlaneMailbox), "Only mailbox");
 
-        // Verify trusted sender
+        // Verify trusted sender and domain
         if (!trustedDomains[_origin]) {
             revert UntrustedDomain(_origin);
         }
-        if (trustedSenders[_origin] != _sender && trustedSenders[_origin] != bytes32(0)) {
-            revert UntrustedSender(_sender);
-        }
+        require(trustedSenders[_origin] == _sender, "Untrusted sender");
 
         // Calculate message ID
         bytes32 messageId = keccak256(abi.encodePacked(_origin, _sender, _message));
         
-        // Check if already processed
-        if (processedMessages[messageId]) {
-            revert MessageAlreadyProcessed(messageId);
-        }
-
-        // Mark as processed
-        processedMessages[messageId] = true;
-
-        // Decode message
+        // Decode message to verify recipient before further processing
         (
             MessageType messageType,
             address targetVault,
@@ -212,6 +181,17 @@ contract CrossChainMessenger is
             uint256 timestamp
         ) = abi.decode(_message, (MessageType, address, bytes, uint256, uint256));
 
+        // Authenticate that this message is intended for this MotherVault
+        require(targetVault == motherVault, "Recipient mismatch");
+
+        // Check if already processed
+        if (processedMessages[messageId]) {
+            revert MessageAlreadyProcessed(messageId);
+        }
+
+        // Mark as processed
+        processedMessages[messageId] = true;
+
         // Check message expiry
         if (block.timestamp > timestamp + MESSAGE_EXPIRY) {
             revert MessageExpired(timestamp + MESSAGE_EXPIRY);
@@ -219,11 +199,13 @@ contract CrossChainMessenger is
 
         emit MessageReceived(_origin, messageType, messageId, nonce);
 
-        // Process based on message type
+        // Route the decoded message parts to the MotherVault for processing
         bool success;
         bytes memory returnData;
         
-        try this.processMessage(messageType, targetVault, payload) returns (bytes memory data) {
+        try motherVault.call(
+            abi.encodeWithSignature("handleIncomingMessage(uint32,bytes32,bytes)", _origin, _sender, abi.encode(messageType, payload))
+        ) returns (bytes memory data) {
             success = true;
             returnData = data;
         } catch Error(string memory reason) {
@@ -243,39 +225,6 @@ contract CrossChainMessenger is
         });
 
         emit MessageProcessed(messageId, success, returnData);
-    }
-
-    /**
-     * @notice Process a message based on its type
-     * @param messageType Type of message
-     * @param targetVault Target vault address
-     * @param payload Message payload
-     */
-    function processMessage(
-        MessageType messageType,
-        address targetVault,
-        bytes calldata payload
-    ) external returns (bytes memory) {
-        require(msg.sender == address(this), "Only self");
-
-        // Route to appropriate handler
-        if (messageType == MessageType.DEPOSIT_REQUEST) {
-            return _handleDepositRequest(targetVault, payload);
-        } else if (messageType == MessageType.WITHDRAWAL_REQUEST) {
-            return _handleWithdrawalRequest(targetVault, payload);
-        } else if (messageType == MessageType.YIELD_REPORT) {
-            return _handleYieldReport(targetVault, payload);
-        } else if (messageType == MessageType.REBALANCE_COMMAND) {
-            return _handleRebalanceCommand(targetVault, payload);
-        } else if (messageType == MessageType.EMERGENCY_PAUSE) {
-            return _handleEmergencyPause(targetVault);
-        } else if (messageType == MessageType.EMERGENCY_UNPAUSE) {
-            return _handleEmergencyUnpause(targetVault);
-        } else if (messageType == MessageType.EMERGENCY_WITHDRAW_ALL) {
-            return _handleEmergencyWithdrawAll(targetVault, payload);
-        } else {
-            revert InvalidMessageType(uint8(messageType));
-        }
     }
 
     /**
@@ -366,70 +315,6 @@ contract CrossChainMessenger is
      */
     function unpause() external onlyRole(PAUSER_ROLE) {
         _unpause();
-    }
-
-    // Internal handler functions
-    function _handleDepositRequest(address targetVault, bytes calldata payload) private returns (bytes memory) {
-        // Forward to mother vault
-        (bool success, bytes memory data) = motherVault.call(
-            abi.encodeWithSignature("handleDepositFromChild(address,bytes)", targetVault, payload)
-        );
-        require(success, "Deposit handling failed");
-        return data;
-    }
-
-    function _handleWithdrawalRequest(address targetVault, bytes calldata payload) private returns (bytes memory) {
-        // Forward to mother vault
-        (bool success, bytes memory data) = motherVault.call(
-            abi.encodeWithSignature("handleWithdrawalToChild(address,bytes)", targetVault, payload)
-        );
-        require(success, "Withdrawal handling failed");
-        return data;
-    }
-
-    function _handleYieldReport(address targetVault, bytes calldata payload) private returns (bytes memory) {
-        // Forward to mother vault
-        (bool success, bytes memory data) = motherVault.call(
-            abi.encodeWithSignature("handleYieldReport(address,bytes)", targetVault, payload)
-        );
-        require(success, "Yield report handling failed");
-        return data;
-    }
-
-    function _handleRebalanceCommand(address targetVault, bytes calldata payload) private returns (bytes memory) {
-        // Forward to mother vault
-        (bool success, bytes memory data) = motherVault.call(
-            abi.encodeWithSignature("handleRebalanceCommand(address,bytes)", targetVault, payload)
-        );
-        require(success, "Rebalance command failed");
-        return data;
-    }
-
-    function _handleEmergencyPause(address targetVault) private returns (bytes memory) {
-        // Forward to mother vault
-        (bool success, bytes memory data) = motherVault.call(
-            abi.encodeWithSignature("handleEmergencyPause(address)", targetVault)
-        );
-        require(success, "Emergency pause failed");
-        return data;
-    }
-
-    function _handleEmergencyUnpause(address targetVault) private returns (bytes memory) {
-        // Forward to mother vault
-        (bool success, bytes memory data) = motherVault.call(
-            abi.encodeWithSignature("handleEmergencyUnpause(address)", targetVault)
-        );
-        require(success, "Emergency unpause failed");
-        return data;
-    }
-
-    function _handleEmergencyWithdrawAll(address targetVault, bytes calldata payload) private returns (bytes memory) {
-        // Forward to mother vault
-        (bool success, bytes memory data) = motherVault.call(
-            abi.encodeWithSignature("handleEmergencyWithdrawAll(address,bytes)", targetVault, payload)
-        );
-        require(success, "Emergency withdrawal failed");
-        return data;
     }
 
     function _configureDomain(uint256 chainId, uint32 domain) private {

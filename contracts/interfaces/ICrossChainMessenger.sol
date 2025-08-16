@@ -54,7 +54,7 @@ interface ICrossChainMessenger {
         uint32 origin,
         bytes32 sender,
         bytes calldata message
-    ) external payable;
+    ) external;
     
     function getMessageStatus(bytes32 messageId) external view returns (bool processed, bool success);
     
