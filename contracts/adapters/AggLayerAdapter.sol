@@ -41,7 +41,7 @@ interface IPolygonZkEVMBridge {
 
 /**
  * @title AggLayerAdapter
- * @notice Adapter for bridging USDC from Polygon to Katana via AggLayer Unified Bridge
+ * @notice Adapter for bridging USDC from Ethereum to Katana via AggLayer Unified Bridge
  * @dev Implements the bridge interface for AggLayer/Polygon zkEVM Bridge V2
  */
 contract AggLayerAdapter is Ownable(msg.sender), ReentrancyGuard {
@@ -50,12 +50,12 @@ contract AggLayerAdapter is Ownable(msg.sender), ReentrancyGuard {
     // State variables
     IPolygonZkEVMBridge public bridge;  // Made mutable for post-deployment configuration
     address public immutable usdc;
-    address public bridgeVault;
+    address public ethereumBridgeHub; // Renamed from bridgeVault for clarity
     address public katanaChildVault;
     
     // Network IDs (to be configured based on actual AggLayer deployment)
-    uint32 public polygonNetworkId = 1; // Polygon network ID in AggLayer
-    uint32 public katanaNetworkId = 2;  // Katana network ID in AggLayer
+    uint32 public ethereumNetworkId = 0; // Ethereum network ID in AggLayer (source network)
+    uint32 public katanaNetworkId = 29;  // Katana network ID in AggLayer
     
     // Events
     event BridgeInitiated(
@@ -64,29 +64,32 @@ contract AggLayerAdapter is Ownable(msg.sender), ReentrancyGuard {
         uint32 destinationNetwork,
         bytes32 indexed txHash
     );
-    event BridgeVaultUpdated(address indexed newVault);
+    event EthereumBridgeHubUpdated(address indexed newHub);
     event KatanaVaultUpdated(address indexed newVault);
-    event NetworkIdsUpdated(uint32 polygon, uint32 katana);
+    event NetworkIdsUpdated(uint32 ethereum, uint32 katana);
     event BridgeAddressSet(address indexed bridge);
     
     constructor(
         address _usdc,
-        address _bridgeVault
+        address _ethereumBridgeHub
     ) {
         require(_usdc != address(0), "AggLayerAdapter: Invalid USDC");
-        require(_bridgeVault != address(0), "AggLayerAdapter: Invalid vault");
+        require(_ethereumBridgeHub != address(0), "AggLayerAdapter: Invalid bridge hub");
         
         usdc = _usdc;
-        bridgeVault = _bridgeVault;
+        ethereumBridgeHub = _ethereumBridgeHub;
+        
+        // Set the Unified Bridge address for Ethereum-Katana bridging
+        bridge = IPolygonZkEVMBridge(0x528e26b25a34a4A5d0dbDa1d57D318153d2ED582);
+        emit BridgeAddressSet(0x528e26b25a34a4A5d0dbDa1d57D318153d2ED582);
     }
     
     /**
-     * @notice Set the bridge address (can only be called once)
+     * @notice Update the bridge address (only for emergency situations)
      * @param _bridge Address of the AggLayer bridge contract
      */
     function setBridgeAddress(address _bridge) external onlyOwner {
         require(_bridge != address(0), "AggLayerAdapter: Invalid bridge");
-        require(address(bridge) == address(0), "AggLayerAdapter: Bridge already set");
         
         bridge = IPolygonZkEVMBridge(_bridge);
         emit BridgeAddressSet(_bridge);
@@ -102,11 +105,11 @@ contract AggLayerAdapter is Ownable(msg.sender), ReentrancyGuard {
         address recipient
     ) external nonReentrant {
         require(address(bridge) != address(0), "AggLayerAdapter: Bridge not configured");
-        require(msg.sender == bridgeVault, "AggLayerAdapter: Only BridgeVault");
+        require(msg.sender == ethereumBridgeHub, "AggLayerAdapter: Only EthereumBridgeHub");
         require(amount > 0, "AggLayerAdapter: Zero amount");
         require(recipient != address(0), "AggLayerAdapter: Invalid recipient");
         
-        // Transfer USDC from BridgeVault
+        // Transfer USDC from EthereumBridgeHub
         IERC20(usdc).safeTransferFrom(msg.sender, address(this), amount);
         
         // Reset approval first then set new approval
@@ -138,7 +141,7 @@ contract AggLayerAdapter is Ownable(msg.sender), ReentrancyGuard {
         address recipient,
         uint32 destinationNetwork
     ) external nonReentrant {
-        require(msg.sender == bridgeVault || msg.sender == owner(), "AggLayerAdapter: Unauthorized");
+        require(msg.sender == ethereumBridgeHub || msg.sender == owner(), "AggLayerAdapter: Unauthorized");
         require(amount > 0, "AggLayerAdapter: Zero amount");
         require(recipient != address(0), "AggLayerAdapter: Invalid recipient");
         
@@ -165,7 +168,7 @@ contract AggLayerAdapter is Ownable(msg.sender), ReentrancyGuard {
     
     /**
      * @notice Claim bridged assets (called on destination chain)
-     * @dev This would be called on Katana to claim USDC sent from Polygon
+     * @dev This would be called on Katana to claim USDC sent from Ethereum
      */
     function claimAsset(
         bytes32[32] calldata smtProof,
@@ -195,10 +198,10 @@ contract AggLayerAdapter is Ownable(msg.sender), ReentrancyGuard {
     
     // Admin functions
     
-    function setBridgeVault(address _vault) external onlyOwner {
-        require(_vault != address(0), "AggLayerAdapter: Invalid vault");
-        bridgeVault = _vault;
-        emit BridgeVaultUpdated(_vault);
+    function setEthereumBridgeHub(address _hub) external onlyOwner {
+        require(_hub != address(0), "AggLayerAdapter: Invalid hub");
+        ethereumBridgeHub = _hub;
+        emit EthereumBridgeHubUpdated(_hub);
     }
     
     function setKatanaChildVault(address _vault) external onlyOwner {
@@ -207,10 +210,10 @@ contract AggLayerAdapter is Ownable(msg.sender), ReentrancyGuard {
         emit KatanaVaultUpdated(_vault);
     }
     
-    function setNetworkIds(uint32 _polygon, uint32 _katana) external onlyOwner {
-        polygonNetworkId = _polygon;
+    function setNetworkIds(uint32 _ethereum, uint32 _katana) external onlyOwner {
+        ethereumNetworkId = _ethereum;
         katanaNetworkId = _katana;
-        emit NetworkIdsUpdated(_polygon, _katana);
+        emit NetworkIdsUpdated(_ethereum, _katana);
     }
     
     /**

@@ -351,6 +351,11 @@ contract MotherVaultTest is Test {
     // ASSET LIMIT & DEPOSIT CAP TESTS
     // ================================
 
+    // Chain IDs and domains for the new architecture
+    uint32 constant BASE_SEPOLIA_DOMAIN = 84532;
+    uint32 constant ETHEREUM_SEPOLIA_DOMAIN = 11155111;
+    uint32 constant KATANA_DOMAIN = 129399;
+
     function _deployAssetsToChild(uint32 domainId, address childVaultAddress, uint256 amount) private {
         vault.addChildVault(domainId, childVaultAddress);
         vm.prank(owner);
@@ -378,7 +383,7 @@ contract MotherVaultTest is Test {
         vault.deposit(depositAmount, alice);
         uint256 totalIdleBefore = usdc.balanceOf(address(vault));
         address childVault = address(0xABC);
-        _deployAssetsToChild(1, childVault, deployAmount);
+        _deployAssetsToChild(ETHEREUM_SEPOLIA_DOMAIN, childVault, deployAmount);
 
         // Calculate expected withdrawal accounting for buffer requirements
         uint256 remainingIdle = totalIdleBefore - deployAmount;
@@ -394,7 +399,7 @@ contract MotherVaultTest is Test {
         uint256 deployAmount = 1500 * ONE_USDC;
         vm.prank(alice);
         vault.deposit(depositAmount, alice);
-        _deployAssetsToChild(1, address(0xABC), deployAmount);
+        _deployAssetsToChild(ETHEREUM_SEPOLIA_DOMAIN, address(0xABC), deployAmount);
         uint256 maxWithdraw = vault.maxWithdraw(alice);
         vm.startPrank(alice);
         uint256 shares = vault.withdraw(maxWithdraw, alice, alice);
@@ -407,7 +412,7 @@ contract MotherVaultTest is Test {
         uint256 deployAmount = 1500 * ONE_USDC;
         vm.prank(alice);
         vault.deposit(depositAmount, alice);
-        _deployAssetsToChild(1, address(0xABC), deployAmount);
+        _deployAssetsToChild(ETHEREUM_SEPOLIA_DOMAIN, address(0xABC), deployAmount);
         uint256 maxWithdraw = vault.maxWithdraw(alice);
         uint256 withdrawAmount = maxWithdraw + 1;
         vm.startPrank(alice);
@@ -421,15 +426,15 @@ contract MotherVaultTest is Test {
         vm.expectRevert(
             abi.encodeWithSignature("AccessControlUnauthorizedAccount(address,bytes32)", alice, vault.MANAGER_ROLE())
         );
-        vault.addChildVault(1, address(0x456));
+        vault.addChildVault(ETHEREUM_SEPOLIA_DOMAIN, address(0x456));
         vm.expectRevert(
             abi.encodeWithSignature("AccessControlUnauthorizedAccount(address,bytes32)", alice, vault.MANAGER_ROLE())
         );
-        vault.removeChildVault(1);
+        vault.removeChildVault(ETHEREUM_SEPOLIA_DOMAIN);
         vm.expectRevert(
             abi.encodeWithSignature("AccessControlUnauthorizedAccount(address,bytes32)", alice, vault.MANAGER_ROLE())
         );
-        vault.deployToChildVault(1, 100 * ONE_USDC);
+        vault.deployToChildVault(ETHEREUM_SEPOLIA_DOMAIN, 100 * ONE_USDC);
         vm.expectRevert(
             abi.encodeWithSignature("AccessControlUnauthorizedAccount(address,bytes32)", alice, vault.MANAGER_ROLE())
         );
@@ -450,17 +455,17 @@ contract MotherVaultTest is Test {
     }
 
     function test_AddChildVault_AlreadyExists() public {
-        vault.addChildVault(1, address(0xABC));
+        vault.addChildVault(ETHEREUM_SEPOLIA_DOMAIN, address(0xABC));
         vm.expectRevert("Vault already exists");
-        vault.addChildVault(1, address(0xDEF));
+        vault.addChildVault(ETHEREUM_SEPOLIA_DOMAIN, address(0xDEF));
     }
 
     function test_DeployToChild_InsufficientIdle() public {
-        vault.addChildVault(1, address(0xABC));
+        vault.addChildVault(ETHEREUM_SEPOLIA_DOMAIN, address(0xABC));
         uint256 idleFunds = usdc.balanceOf(address(vault));
         uint256 deployAmount = idleFunds + 1;
         vm.expectRevert("Insufficient idle funds");
-        vault.deployToChildVault(1, deployAmount);
+        vault.deployToChildVault(ETHEREUM_SEPOLIA_DOMAIN, deployAmount);
     }
 
     function test_Initialize_AlreadyInitialized() public {
@@ -530,8 +535,8 @@ contract MotherVaultTest is Test {
         // Optionally deploy some assets to child vault
         deployAmount = bound(deployAmount, 0, vault.getDeployableAmount());
         if (deployAmount > 0) {
-            vault.addChildVault(1, address(0xABC));
-            vault.deployToChildVault(1, deployAmount);
+            vault.addChildVault(ETHEREUM_SEPOLIA_DOMAIN, address(0xABC));
+            vault.deployToChildVault(ETHEREUM_SEPOLIA_DOMAIN, deployAmount);
         }
 
         // Attempt withdrawal
@@ -568,8 +573,8 @@ contract MotherVaultTest is Test {
         public
     {
         // Set up two child vaults
-        vault.addChildVault(1, address(0xABC));
-        vault.addChildVault(2, address(0xDEF));
+        vault.addChildVault(ETHEREUM_SEPOLIA_DOMAIN, address(0xABC));
+        vault.addChildVault(KATANA_DOMAIN, address(0xDEF));
 
         // Bound APYs to reasonable values (0-50%)
         apy1 = bound(apy1, 0, 5000);
@@ -589,15 +594,15 @@ contract MotherVaultTest is Test {
 
         // Deploy to both vaults
         if (deployAmount1 > 0) {
-            vault.deployToChildVault(1, deployAmount1);
+            vault.deployToChildVault(ETHEREUM_SEPOLIA_DOMAIN, deployAmount1);
         }
         if (deployAmount2 > 0) {
-            vault.deployToChildVault(2, deployAmount2);
+            vault.deployToChildVault(KATANA_DOMAIN, deployAmount2);
         }
 
         // Report yields
-        vault.reportYield(1, apy1, deployAmount1);
-        vault.reportYield(2, apy2, deployAmount2);
+        vault.reportYield(ETHEREUM_SEPOLIA_DOMAIN, apy1, deployAmount1);
+        vault.reportYield(KATANA_DOMAIN, apy2, deployAmount2);
 
         // Calculate APY differential
         uint256 apyDiff = apy1 > apy2 ? apy1 - apy2 : apy2 - apy1;
@@ -670,8 +675,8 @@ contract MotherVaultTest is Test {
      */
     function testFuzz_RateLimitEnforcement(uint256 timeBetweenRebalances) public {
         // Set up child vaults with different APYs
-        vault.addChildVault(1, address(0xABC));
-        vault.addChildVault(2, address(0xDEF));
+        vault.addChildVault(ETHEREUM_SEPOLIA_DOMAIN, address(0xABC));
+        vault.addChildVault(KATANA_DOMAIN, address(0xDEF));
 
         // Make a deposit and deploy to both vaults
         uint256 depositAmount = 5000 * ONE_USDC; // Stay well below cap
@@ -679,12 +684,12 @@ contract MotherVaultTest is Test {
         vault.deposit(depositAmount, alice);
 
         uint256 deployAmount = vault.getDeployableAmount() / 2;
-        vault.deployToChildVault(1, deployAmount);
-        vault.deployToChildVault(2, deployAmount);
+        vault.deployToChildVault(ETHEREUM_SEPOLIA_DOMAIN, deployAmount);
+        vault.deployToChildVault(KATANA_DOMAIN, deployAmount);
 
         // Report significantly different APYs
-        vault.reportYield(1, 1000, deployAmount); // 10%
-        vault.reportYield(2, 100, deployAmount); // 1%
+        vault.reportYield(ETHEREUM_SEPOLIA_DOMAIN, 1000, deployAmount); // 10%
+        vault.reportYield(KATANA_DOMAIN, 100, deployAmount); // 1%
 
         // Set short cooldown for testing
         vault.setRebalanceCooldown(1 hours);
@@ -737,14 +742,14 @@ contract MotherVaultTest is Test {
         vault.deposit(depositAmount, alice);
 
         // Add child vault
-        vault.addChildVault(1, address(0xABC));
+        vault.addChildVault(ETHEREUM_SEPOLIA_DOMAIN, address(0xABC));
 
         // Calculate deployment amount based on ratio
         uint256 deployableAmount = vault.getDeployableAmount();
         uint256 deployAmount = (deployableAmount * deployRatio) / 100;
 
         if (deployAmount > 0) {
-            vault.deployToChildVault(1, deployAmount);
+            vault.deployToChildVault(ETHEREUM_SEPOLIA_DOMAIN, deployAmount);
         }
 
         // Verify buffer requirements
@@ -972,8 +977,8 @@ contract MotherVaultTest is Test {
         minDiff = bound(minDiff, 0, 5000); // 0-50%
 
         // Set up child vaults
-        vault.addChildVault(1, address(0xABC));
-        vault.addChildVault(2, address(0xDEF));
+        vault.addChildVault(ETHEREUM_SEPOLIA_DOMAIN, address(0xABC));
+        vault.addChildVault(KATANA_DOMAIN, address(0xDEF));
 
         // Set minimum differential
         vault.setMinAPYDifferential(minDiff);
@@ -985,12 +990,12 @@ contract MotherVaultTest is Test {
 
         uint256 deployAmount = vault.getDeployableAmount() / 2;
         if (deployAmount > 0) {
-            vault.deployToChildVault(1, deployAmount);
-            vault.deployToChildVault(2, deployAmount);
+            vault.deployToChildVault(ETHEREUM_SEPOLIA_DOMAIN, deployAmount);
+            vault.deployToChildVault(KATANA_DOMAIN, deployAmount);
 
             // Report yields
-            vault.reportYield(1, apy1, deployAmount);
-            vault.reportYield(2, apy2, deployAmount);
+            vault.reportYield(ETHEREUM_SEPOLIA_DOMAIN, apy1, deployAmount);
+            vault.reportYield(KATANA_DOMAIN, apy2, deployAmount);
 
             // Calculate expected differential
             uint256 actualDiff = apy1 > apy2 ? apy1 - apy2 : apy2 - apy1;
@@ -1132,13 +1137,13 @@ contract MotherVaultTest is Test {
         vault.deposit(depositAmount, alice);
 
         // Add child vault and deploy some funds
-        vault.addChildVault(1, address(0xABC));
+        vault.addChildVault(ETHEREUM_SEPOLIA_DOMAIN, address(0xABC));
 
         uint256 deployableAmount = vault.getDeployableAmount();
         uint256 deployAmount = (deployableAmount * deployRatio) / 100;
 
         if (deployAmount > 0) {
-            vault.deployToChildVault(1, deployAmount);
+            vault.deployToChildVault(ETHEREUM_SEPOLIA_DOMAIN, deployAmount);
         }
 
         // Verify buffer state
@@ -1179,7 +1184,7 @@ contract MotherVaultTest is Test {
         // Setup: deposit and add child vault
         vm.prank(alice);
         vault.deposit(depositAmount, alice);
-        vault.addChildVault(1, address(0xABC));
+        vault.addChildVault(ETHEREUM_SEPOLIA_DOMAIN, address(0xABC));
 
         // Set initial allowance to non-zero to simulate previous usage
         vm.prank(address(vault));
@@ -1189,7 +1194,7 @@ contract MotherVaultTest is Test {
         assertEq(usdc.allowance(address(vault), address(cctpBridge)), 10_000 * ONE_USDC);
 
         // Deploy to child vault
-        vault.deployToChildVault(1, deployAmount);
+        vault.deployToChildVault(ETHEREUM_SEPOLIA_DOMAIN, deployAmount);
 
         // Verify allowance was reset to 0 first, then set to amount
         // The final allowance should be 0 since tokens were transferred via bridge
@@ -1204,11 +1209,11 @@ contract MotherVaultTest is Test {
         // Setup: deposit and add child vaults
         vm.prank(alice);
         vault.deposit(depositAmount, alice);
-        vault.addChildVault(1, address(0xABC)); // Source chain
-        vault.addChildVault(2, address(0xDEF)); // Target chain
+        vault.addChildVault(ETHEREUM_SEPOLIA_DOMAIN, address(0xABC)); // Source chain
+        vault.addChildVault(KATANA_DOMAIN, address(0xDEF)); // Target chain
 
         // Deploy some funds to source chain first
-        vault.deployToChildVault(1, deployAmount);
+        vault.deployToChildVault(ETHEREUM_SEPOLIA_DOMAIN, deployAmount);
 
         // Set initial allowance to non-zero to test reset
         vm.prank(address(vault));
@@ -1220,7 +1225,7 @@ contract MotherVaultTest is Test {
         usdc.mint(address(vault), rebalanceAmount);
 
         // Initiate rebalance (this only sends a message, no immediate USDC transfer)
-        vault.initiateRebalance(1, 2, rebalanceAmount);
+        vault.initiateRebalance(ETHEREUM_SEPOLIA_DOMAIN, KATANA_DOMAIN, rebalanceAmount);
 
         // Verify allowance remains unchanged since no USDC was transferred yet
         // The actual USDC transfer happens when funds arrive from child vault via CCTP

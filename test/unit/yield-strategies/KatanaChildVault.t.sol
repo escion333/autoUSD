@@ -147,7 +147,9 @@ contract KatanaChildVaultTest is Test {
     MockERC20 public sushiToken;
 
     address admin = address(this);
-    uint32 constant MOTHER_CHAIN_DOMAIN = 1;
+    // Updated to use Base Sepolia as the Mother chain
+    uint32 constant MOTHER_CHAIN_DOMAIN = 84532; // Base Sepolia
+    uint32 constant KATANA_DOMAIN = 129399; // Katana testnet
     address constant MOTHER_VAULT_ADDRESS = address(0x100);
     bytes32 constant MOTHER_VAULT_SENDER = bytes32(uint256(uint160(MOTHER_VAULT_ADDRESS)));
 

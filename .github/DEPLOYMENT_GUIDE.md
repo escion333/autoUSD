@@ -22,13 +22,13 @@ This guide covers the complete deployment process for the autoUSD protocol, incl
 
 ### Mainnet
 - **Base Mainnet** (Chain ID: 8453)
-- **Katana** (Chain ID: TBD)  
-- **Zircuit** (Chain ID: TBD)
+- **Ethereum Mainnet** (Chain ID: 1)
+- **Katana** (Chain ID: TBD)
 
 ### Testnet
 - **Base Sepolia** (Chain ID: 84532)
-- **Katana Testnet** (Chain ID: TBD)
-- **Zircuit Testnet** (Chain ID: TBD)
+- **Ethereum Sepolia** (Chain ID: 11155111)
+- **Katana Tatara** (Chain ID: TBD)
 
 ## 📋 Pre-Deployment Checklist
 
@@ -64,9 +64,10 @@ See `.env.example` for the complete list. Key variables include:
 ### Infrastructure Verification
 
 1. **Hyperlane Mailboxes**: Verify addresses on all target chains
-2. **CCTP Infrastructure**: Confirm Circle CCTP availability
-3. **USDC Addresses**: Verify official USDC contracts
-4. **Gas Funding**: Ensure sufficient ETH for deployment
+2. **CCTP Infrastructure**: Confirm Circle CCTP availability on Base ↔ Ethereum
+3. **AggLayer Unified Bridge**: Verify bridge contracts on Ethereum ↔ Katana
+4. **USDC Addresses**: Verify official USDC contracts on all chains
+5. **Gas Funding**: Ensure sufficient ETH for deployment on all chains
 
 ## 🚀 Deployment Process
 
@@ -99,7 +100,7 @@ npm run deploy:mainnet
 ```
 
 The deployment script will:
-- Deploy all core contracts (MotherVault, CCTPBridge, etc.)
+- Deploy all core contracts (MotherVault, CCTPBridge, EthereumBridgeHub, etc.)
 - Configure initial parameters
 - Set up permissions and access control
 - Save deployment addresses to `deployments/` directory
@@ -117,21 +118,21 @@ This verification includes:
 - Permission verification
 - Integration testing
 
-### Step 4: Deploy Child Vaults
+### Step 4: Deploy Ethereum Bridge Hub
 
-#### Katana Child Vault
+```bash
+# Deploy bridge hub on Ethereum
+npm run deploy:ethereum-hub
+```
+
+### Step 5: Deploy Katana Child Vault
+
 ```bash
 # Switch to Katana network and deploy
 npm run deploy:child-katana
 ```
 
-#### Zircuit Child Vault  
-```bash
-# Switch to Zircuit network and deploy
-npm run deploy:child-zircuit
-```
-
-### Step 5: Configure Cross-Chain Relationships
+### Step 6: Configure Cross-Chain Relationships
 
 ```bash
 # Configure cross-chain messaging and vault relationships
@@ -144,7 +145,7 @@ This script:
 - Configures domain mappings
 - Establishes cross-chain communication
 
-### Step 6: Setup Domain Mapping
+### Step 7: Setup Domain Mapping
 
 ```bash
 # Generate and deploy domain mapping configuration
@@ -153,7 +154,8 @@ npm run setup:domain-mapping
 
 Creates configuration files for:
 - Hyperlane domain mappings
-- CCTP domain configurations
+- CCTP domain configurations (Base ↔ Ethereum)
+- AggLayer Unified Bridge configurations (Ethereum ↔ Katana)
 - Network relationship definitions
 
 ## 🔍 Post-Deployment Verification
@@ -211,15 +213,30 @@ The project includes automated deployment workflows:
 Configure these in GitHub repository settings:
 
 **Testnet Variables:**
-- `USDC_ADDRESS_TESTNET`
-- `HYPERLANE_MAILBOX_TESTNET`
-- `CCTP_TOKEN_MESSENGER_TESTNET`
+- `USDC_ADDRESS_BASE_SEPOLIA`
+- `USDC_ADDRESS_ETHEREUM_SEPOLIA` 
+- `USDC_ADDRESS_KATANA_TATARA`
+- `HYPERLANE_MAILBOX_BASE_SEPOLIA`
+- `HYPERLANE_MAILBOX_ETHEREUM_SEPOLIA`
+- `HYPERLANE_MAILBOX_KATANA_TATARA`
+- `CCTP_TOKEN_MESSENGER_BASE_SEPOLIA`
+- `CCTP_TOKEN_MESSENGER_ETHEREUM_SEPOLIA`
+- `AGGLAYER_BRIDGE_ETHEREUM_SEPOLIA`
+- `AGGLAYER_BRIDGE_KATANA_TATARA`
 - etc.
 
 **Mainnet Variables:**
 - `TREASURY_ADDRESS_MAINNET`
-- `USDC_ADDRESS_MAINNET`
-- `HYPERLANE_MAILBOX_MAINNET`
+- `USDC_ADDRESS_BASE_MAINNET`
+- `USDC_ADDRESS_ETHEREUM_MAINNET`
+- `USDC_ADDRESS_KATANA_MAINNET`
+- `HYPERLANE_MAILBOX_BASE_MAINNET`
+- `HYPERLANE_MAILBOX_ETHEREUM_MAINNET`
+- `HYPERLANE_MAILBOX_KATANA_MAINNET`
+- `CCTP_TOKEN_MESSENGER_BASE_MAINNET`
+- `CCTP_TOKEN_MESSENGER_ETHEREUM_MAINNET`
+- `AGGLAYER_BRIDGE_ETHEREUM_MAINNET`
+- `AGGLAYER_BRIDGE_KATANA_MAINNET`
 - etc.
 
 ### Repository Secrets
@@ -231,6 +248,10 @@ Configure these in GitHub repository settings:
 - `ETHERSCAN_API_KEY`
 - `BASE_RPC_URL`
 - `BASE_SEPOLIA_RPC_URL`
+- `ETHEREUM_RPC_URL`
+- `ETHEREUM_SEPOLIA_RPC_URL`
+- `KATANA_RPC_URL`
+- `KATANA_TATARA_RPC_URL`
 
 ## 🚨 Emergency Procedures
 

@@ -15,6 +15,12 @@ import { CCTPBridge } from "./CCTPBridge.sol";
  * @title CrossChainMessenger
  * @notice Coordinates cross-chain messaging between CCTP (for USDC) and Hyperlane (for messages)
  * @dev Implements the ICrossChainMessenger interface to provide unified cross-chain operations
+ * 
+ * Message Flow Architecture:
+ * - Base Sepolia (Mother Vault) ↔ Ethereum Sepolia (CCTP bridge) ↔ Katana Tatara (Child Vault)
+ * - CCTP handles USDC transfers between Base Sepolia and Ethereum Sepolia
+ * - Hyperlane handles all cross-chain messages between all chains
+ * - Supports direct messaging between any configured testnet chains
  */
 contract CrossChainMessenger is ICrossChainMessenger, IMessageRecipient, AccessControl, Pausable, ReentrancyGuard {
     // Roles
@@ -113,11 +119,10 @@ contract CrossChainMessenger is ICrossChainMessenger, IMessageRecipient, AccessC
         _grantRole(PAUSER_ROLE, _admin);
         _grantRole(RETRIER_ROLE, _admin);
 
-        // Configure common Hyperlane domains
-        _configureDomain(8453, 8453); // Base
-        _configureDomain(1, 1); // Ethereum
-        _configureDomain(10, 10); // Optimism
-        _configureDomain(42_161, 42_161); // Arbitrum
+        // Configure testnet Hyperlane domains
+        _configureDomain(84532, 84532); // Base Sepolia
+        _configureDomain(11155111, 11155111); // Ethereum Sepolia
+        _configureDomain(129399, 747474); // Katana Tatara
     }
 
     /**

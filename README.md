@@ -9,9 +9,9 @@ autoUSD is a decentralized protocol that optimizes USDC yields across multiple L
 ### Key Features
 
 - **Single Deposit Interface**: Deposit USDC on Base L2 through an ERC-4626 compliant vault
-- **Multi-Chain Yield Generation**: Automated distribution across Base, Katana, and Zircuit
+- **Multi-Chain Yield Generation**: Automated distribution across Base, Ethereum, and Katana
 - **Dynamic Rebalancing**: APY-driven rebalancing when yield differentials exceed thresholds
-- **Cross-Chain Infrastructure**: Leverages Circle CCTP and Hyperlane for secure bridging
+- **Cross-Chain Infrastructure**: Leverages Circle CCTP, AggLayer Unified Bridge, and Hyperlane for secure bridging
 - **Gasless Transactions**: Circle Paymaster integration for sponsored transactions
 - **Emergency Controls**: System-wide pause functionality for risk management
 
@@ -19,9 +19,13 @@ autoUSD is a decentralized protocol that optimizes USDC yields across multiple L
 
 The protocol consists of:
 - **Mother Vault**: Main vault on Base L2 handling deposits/withdrawals
-- **Child Vaults**: Yield-generating vaults deployed on each target L2
+- **Ethereum Bridge Hub**: Lightweight hub on Ethereum for bridging coordination
+- **Child Vaults**: Yield-generating vaults deployed on Katana
 - **Rebalancing Engine**: Automated system optimizing yields across chains
-- **Cross-chain Messaging**: Hyperlane V3 for coordination between vaults
+- **Cross-chain Infrastructure**:
+  - Circle CCTP for Base ↔ Ethereum USDC bridging
+  - AggLayer Unified Bridge for Ethereum ↔ Katana bridging
+  - Hyperlane V3 for messaging and coordination
 
 ## Development Setup
 
@@ -51,9 +55,12 @@ Create a `.env` file with:
 ```
 BASE_RPC_URL=
 BASE_SEPOLIA_RPC_URL=
+ETHEREUM_RPC_URL=
+ETHEREUM_SEPOLIA_RPC_URL=
 KATANA_RPC_URL=
-ZIRCUIT_RPC_URL=
+KATANA_TATARA_RPC_URL=
 BASESCAN_API_KEY=
+ETHERSCAN_API_KEY=
 PRIVATE_KEY=
 ```
 

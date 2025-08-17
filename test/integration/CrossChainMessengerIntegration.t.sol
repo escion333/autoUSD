@@ -30,13 +30,13 @@ contract CrossChainMessengerIntegrationTest is Test {
 
     address public admin = address(0x1);
     address public user = address(0x2);
-    address public childVaultArbitrum = address(0x3);
+    address public childVaultEthereumSepolia = address(0x3);
     address public childVaultKatana = address(0x4);
     address public rebalancer = address(0x5);
 
-    uint32 public constant BASE_DOMAIN = 6;
-    uint32 public constant ARBITRUM_DOMAIN = 3;
-    uint32 public constant KATANA_DOMAIN = 10;
+    uint32 public constant BASE_SEPOLIA_DOMAIN = 6;
+    uint32 public constant ETHEREUM_SEPOLIA_DOMAIN = 0;
+    uint32 public constant KATANA_DOMAIN = 129399;
 
     event MessageSent(uint32 indexed destinationDomain, bytes32 indexed messageId, bytes message);
     event MessageReceived(uint32 indexed sourceDomain, bytes32 indexed messageId, bytes message);
@@ -65,7 +65,7 @@ contract CrossChainMessengerIntegrationTest is Test {
         usdc.mint(address(this), 100e6);
         usdc.approve(address(motherVault), 100e6);
         motherVault.initialize(address(messenger), address(cctpBridge));
-        motherVault.addChildVault(ARBITRUM_DOMAIN, childVaultArbitrum);
+        motherVault.addChildVault(ETHEREUM_SEPOLIA_DOMAIN, childVaultEthereumSepolia);
         motherVault.addChildVault(KATANA_DOMAIN, childVaultKatana);
 
         // Grant admin role to our admin address for later operations
@@ -80,10 +80,10 @@ contract CrossChainMessengerIntegrationTest is Test {
         vm.startPrank(admin);
         // Configure domain mappings (CCTP domain -> Hyperlane domain)
         // We use the CCTP domain as both chain ID and Hyperlane domain for simplicity in tests
-        messenger.configureDomain(ARBITRUM_DOMAIN, ARBITRUM_DOMAIN);
+        messenger.configureDomain(ETHEREUM_SEPOLIA_DOMAIN, ETHEREUM_SEPOLIA_DOMAIN);
         messenger.configureDomain(KATANA_DOMAIN, KATANA_DOMAIN);
         // Set trusted senders
-        messenger.setTrustedSender(ARBITRUM_DOMAIN, bytes32(uint256(uint160(childVaultArbitrum))));
+        messenger.setTrustedSender(ETHEREUM_SEPOLIA_DOMAIN, bytes32(uint256(uint160(childVaultEthereumSepolia))));
         messenger.setTrustedSender(KATANA_DOMAIN, bytes32(uint256(uint160(childVaultKatana))));
         vm.stopPrank();
 
@@ -115,13 +115,13 @@ contract CrossChainMessengerIntegrationTest is Test {
 
         // Step 2: Initiate cross-domain deployment via messenger
         vm.expectEmit(true, false, false, true);
-        emit FundsDeployedToChild(ARBITRUM_DOMAIN, deployAmount);
+        emit FundsDeployedToChild(ETHEREUM_SEPOLIA_DOMAIN, deployAmount);
 
         vm.prank(admin);
-        motherVault.deployToChildVault(ARBITRUM_DOMAIN, deployAmount);
+        motherVault.deployToChildVault(ETHEREUM_SEPOLIA_DOMAIN, deployAmount);
 
         // Step 3: Verify deployment state
-        IMotherVault.ChildVault memory childVault = motherVault.getChildVault(ARBITRUM_DOMAIN);
+        IMotherVault.ChildVault memory childVault = motherVault.getChildVault(ETHEREUM_SEPOLIA_DOMAIN);
         assertEq(childVault.deployedAmount, deployAmount, "Child vault should track deployment");
         assertEq(motherVault.totalDeployedAssets(), deployAmount, "Total deployed should match");
         assertEq(motherVault.getCurrentBuffer(), depositAmount - deployAmount, "Buffer should decrease");
@@ -129,7 +129,7 @@ contract CrossChainMessengerIntegrationTest is Test {
         // Step 4: Verify deployment state remains consistent
         // Note: In production, child vault would send yield reports via messenger
         assertEq(
-            motherVault.getChildVault(ARBITRUM_DOMAIN).deployedAmount, deployAmount, "Deployment should be tracked"
+            motherVault.getChildVault(ETHEREUM_SEPOLIA_DOMAIN).deployedAmount, deployAmount, "Deployment should be tracked"
         );
     }
 
@@ -185,9 +185,9 @@ contract CrossChainMessengerIntegrationTest is Test {
      */
     function test_Messenger_ConcurrentOperations() public {
         uint256 initialDeposit = 1000e6;
-        uint256 deployArbitrum = 400e6;
+        uint256 deployEthereumSepolia = 400e6;
         uint256 deployKatana = 300e6;
-        uint256 withdrawArbitrum = 150e6;
+        uint256 withdrawEthereumSepolia = 150e6;
         uint256 redeployKatana = 200e6;
 
         // Initial setup
@@ -198,7 +198,7 @@ contract CrossChainMessengerIntegrationTest is Test {
 
         // Deploy to both child vaults
         vm.startPrank(admin);
-        motherVault.deployToChildVault(ARBITRUM_DOMAIN, deployArbitrum);
+        motherVault.deployToChildVault(ETHEREUM_SEPOLIA_DOMAIN, deployEthereumSepolia);
         motherVault.deployToChildVault(KATANA_DOMAIN, deployKatana);
         vm.stopPrank();
 
@@ -207,17 +207,17 @@ contract CrossChainMessengerIntegrationTest is Test {
         // Concurrent operations:
         // 1. Withdraw from Arbitrum
         vm.prank(address(cctpBridge));
-        motherVault.handleCCTPReceive(withdrawArbitrum, ARBITRUM_DOMAIN, bytes32(uint256(2)));
+        motherVault.handleCCTPReceive(withdrawEthereumSepolia, ETHEREUM_SEPOLIA_DOMAIN, bytes32(uint256(2)));
 
         // 2. Redeploy to Katana
         vm.prank(admin);
         motherVault.deployToChildVault(KATANA_DOMAIN, redeployKatana);
 
         // Verify final state
-        IMotherVault.ChildVault memory arbitrumVault = motherVault.getChildVault(ARBITRUM_DOMAIN);
+        IMotherVault.ChildVault memory ethereumSepoliaVault = motherVault.getChildVault(ETHEREUM_SEPOLIA_DOMAIN);
         IMotherVault.ChildVault memory katanaVault = motherVault.getChildVault(KATANA_DOMAIN);
 
-        assertEq(arbitrumVault.deployedAmount, deployArbitrum - withdrawArbitrum, "Arbitrum should reflect withdrawal");
+        assertEq(ethereumSepoliaVault.deployedAmount, deployEthereumSepolia - withdrawEthereumSepolia, "Ethereum Sepolia should reflect withdrawal");
         assertEq(katanaVault.deployedAmount, deployKatana + redeployKatana, "Katana should reflect redeployment");
         assertEq(motherVault.totalAssets(), totalAssetsBefore, "Total assets should remain constant");
     }
@@ -236,7 +236,7 @@ contract CrossChainMessengerIntegrationTest is Test {
         // Should revert for unauthorized caller
         vm.expectRevert();
         vm.prank(address(mailbox));
-        messenger.handle(ARBITRUM_DOMAIN, bytes32(uint256(uint160(attacker))), withdrawRequest);
+        messenger.handle(ETHEREUM_SEPOLIA_DOMAIN, bytes32(uint256(uint160(attacker))), withdrawRequest);
     }
 
     /**
@@ -255,7 +255,7 @@ contract CrossChainMessengerIntegrationTest is Test {
         vm.stopPrank();
 
         vm.prank(admin);
-        motherVault.deployToChildVault(ARBITRUM_DOMAIN, deployAmount);
+        motherVault.deployToChildVault(ETHEREUM_SEPOLIA_DOMAIN, deployAmount);
 
         // Simulate yield report from child vault via messenger
         bytes memory yieldReport =
@@ -265,10 +265,10 @@ contract CrossChainMessengerIntegrationTest is Test {
 
         // Process yield report
         vm.prank(address(mailbox));
-        messenger.handle(ARBITRUM_DOMAIN, bytes32(uint256(uint160(childVaultArbitrum))), yieldReport);
+        messenger.handle(ETHEREUM_SEPOLIA_DOMAIN, bytes32(uint256(uint160(childVaultEthereumSepolia))), yieldReport);
 
         // Verify yield is recorded
-        IMotherVault.ChildVault memory childVault = motherVault.getChildVault(ARBITRUM_DOMAIN);
+        IMotherVault.ChildVault memory childVault = motherVault.getChildVault(ETHEREUM_SEPOLIA_DOMAIN);
         assertEq(childVault.reportedAPY, apyBps, "APY should be updated");
         assertTrue(childVault.lastReportTime > 0, "Update timestamp should be set");
     }
@@ -292,7 +292,7 @@ contract CrossChainMessengerIntegrationTest is Test {
 
         // Attempt deployment (simulate initial message)
         vm.prank(admin);
-        motherVault.deployToChildVault(ARBITRUM_DOMAIN, deployAmount);
+        motherVault.deployToChildVault(ETHEREUM_SEPOLIA_DOMAIN, deployAmount);
 
         // Simulate retry of deployment message
         bytes memory retryMessage =
@@ -300,10 +300,10 @@ contract CrossChainMessengerIntegrationTest is Test {
 
         // Retry should be idempotent
         vm.prank(address(mailbox));
-        messenger.handle(BASE_DOMAIN, bytes32(uint256(uint160(address(motherVault)))), retryMessage);
+        messenger.handle(BASE_SEPOLIA_DOMAIN, bytes32(uint256(uint160(address(motherVault)))), retryMessage);
 
         // Verify no double accounting
-        IMotherVault.ChildVault memory childVault = motherVault.getChildVault(ARBITRUM_DOMAIN);
+        IMotherVault.ChildVault memory childVault = motherVault.getChildVault(ETHEREUM_SEPOLIA_DOMAIN);
         assertEq(childVault.deployedAmount, deployAmount, "Deployment should not be duplicated");
         assertEq(motherVault.getCurrentBuffer(), bufferBefore - deployAmount, "Buffer should only decrease once");
     }

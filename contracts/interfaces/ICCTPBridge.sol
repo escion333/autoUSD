@@ -26,9 +26,12 @@ interface ICCTPBridge {
     ) external returns (bool success);
     
     // Bridge USDC to another chain
+    // @param amount Amount of USDC to bridge
+    // @param destinationDomain CCTP domain ID (NOT chain ID) - e.g., 0 for Ethereum, 10002 for Base Sepolia
+    // @param recipient Recipient address on destination chain
     function bridgeUSDC(
         uint256 amount, 
-        uint256 destinationChainId, 
+        uint32 destinationDomain, 
         address recipient
     ) external returns (uint64 nonce);
     

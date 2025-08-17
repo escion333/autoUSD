@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Complete deployment script for autoUSD testnet
-# Deploys to Base Sepolia, Polygon Amoy, and Katana Tatara
+# Deploys to Base Sepolia, Ethereum Sepolia, and Katana Tatara
 
 set -e # Exit on error
 
@@ -35,8 +35,8 @@ if [ ! -f .env.base.sepolia ]; then
     exit 1
 fi
 
-if [ ! -f .env.polygon.amoy ]; then
-    echo -e "${RED}❌ .env.polygon.amoy not found${NC}"
+if [ ! -f .env.ethereum.sepolia ]; then
+    echo -e "${RED}❌ .env.ethereum.sepolia not found${NC}"
     exit 1
 fi
 
@@ -53,7 +53,7 @@ echo "1️⃣  Deploying to Base Sepolia..."
 echo "================================"
 source .env.base.sepolia
 
-DEPLOY_OUTPUT=$(forge script script_temp/base/DeployBaseSepolia.s.sol \
+DEPLOY_OUTPUT=$(forge script scripts/deployment/foundry/base/DeployBaseSepolia.s.sol \
     --rpc-url $BASE_SEPOLIA_RPC_URL \
     --broadcast \
     --slow \
@@ -80,13 +80,13 @@ echo ""
 # Export for next deployment
 export MOTHER_VAULT_BASE
 
-# Deploy to Polygon Amoy
-echo "2️⃣  Deploying to Polygon Amoy..."
-echo "================================"
-source .env.polygon.amoy
+# Deploy to Ethereum Sepolia
+echo "2️⃣  Deploying to Ethereum Sepolia..."
+echo "===================================="
+source .env.ethereum.sepolia
 
-DEPLOY_OUTPUT=$(forge script script_temp/polygon/DeployPolygonAmoy.s.sol \
-    --rpc-url $POLYGON_AMOY_RPC_URL \
+DEPLOY_OUTPUT=$(forge script scripts/deployment/foundry/ethereum/DeployEthereumSepolia.s.sol \
+    --rpc-url $ETHEREUM_SEPOLIA_RPC_URL \
     --broadcast \
     --slow \
     -vv 2>&1)
@@ -94,21 +94,21 @@ DEPLOY_OUTPUT=$(forge script script_temp/polygon/DeployPolygonAmoy.s.sol \
 echo "$DEPLOY_OUTPUT"
 
 # Extract addresses (fixed regex)
-BRIDGE_VAULT_POLYGON=$(echo "$DEPLOY_OUTPUT" | grep "BridgeVault deployed:" | grep -o '0x[a-fA-F0-9]\{40\}' | head -1)
-CCTP_BRIDGE_POLYGON=$(echo "$DEPLOY_OUTPUT" | grep "CCTPBridge deployed:" | grep -o '0x[a-fA-F0-9]\{40\}' | head -1)
+ETHEREUM_BRIDGE_HUB=$(echo "$DEPLOY_OUTPUT" | grep "EthereumBridgeHub deployed:" | grep -o '0x[a-fA-F0-9]\{40\}' | head -1)
+CCTP_BRIDGE_ETHEREUM=$(echo "$DEPLOY_OUTPUT" | grep "CCTPBridge deployed:" | grep -o '0x[a-fA-F0-9]\{40\}' | head -1)
 
-if [ -z "$BRIDGE_VAULT_POLYGON" ]; then
-    echo -e "${RED}❌ Failed to deploy BridgeVault on Polygon Amoy${NC}"
+if [ -z "$ETHEREUM_BRIDGE_HUB" ]; then
+    echo -e "${RED}❌ Failed to deploy EthereumBridgeHub on Ethereum Sepolia${NC}"
     exit 1
 fi
 
-echo -e "${GREEN}✅ Polygon Amoy deployment complete${NC}"
-echo "BridgeVault: $BRIDGE_VAULT_POLYGON"
-echo "CCTPBridge: $CCTP_BRIDGE_POLYGON"
+echo -e "${GREEN}✅ Ethereum Sepolia deployment complete${NC}"
+echo "EthereumBridgeHub: $ETHEREUM_BRIDGE_HUB"
+echo "CCTPBridge: $CCTP_BRIDGE_ETHEREUM"
 echo ""
 
 # Export for next deployment
-export BRIDGE_VAULT_POLYGON
+export ETHEREUM_BRIDGE_HUB
 
 # Deploy to Katana Tatara
 echo "3️⃣  Deploying to Katana Tatara..."
@@ -123,7 +123,7 @@ if [[ "$KATANA_TATARA_RPC_URL" == *"<apikey>"* ]]; then
     KATANA_TATARA_RPC_URL="https://rpc.tatara.katana.network"
 fi
 
-DEPLOY_OUTPUT=$(forge script script_temp/katana/DeployKatanaTatara.s.sol \
+DEPLOY_OUTPUT=$(forge script scripts/deployment/foundry/katana/DeployKatanaTatara.s.sol \
     --rpc-url $KATANA_TATARA_RPC_URL \
     --broadcast \
     --slow \
@@ -151,21 +151,21 @@ cat > DEPLOYED_ADDRESSES.md << EOF
 # Deployed Contract Addresses
 Generated: $(date)
 
-## Base Sepolia
+## Base Sepolia (Mother Vault)
 - MotherVault: $MOTHER_VAULT_BASE
 - CCTPBridge: $CCTP_BRIDGE_BASE
 - CrossChainMessenger: $MESSENGER_BASE
 
-## Polygon Amoy
-- BridgeVault: $BRIDGE_VAULT_POLYGON
-- CCTPBridge: $CCTP_BRIDGE_POLYGON
+## Ethereum Sepolia (Bridge Hub)
+- EthereumBridgeHub: $ETHEREUM_BRIDGE_HUB
+- CCTPBridge: $CCTP_BRIDGE_ETHEREUM
 
-## Katana Tatara
+## Katana Tatara (Child Vault)
 - KatanaChildVault: $KATANA_CHILD_VAULT
 
 ## Explorers
 - Base Sepolia: https://sepolia.basescan.org/address/$MOTHER_VAULT_BASE
-- Polygon Amoy: https://amoy.polygonscan.com/address/$BRIDGE_VAULT_POLYGON
+- Ethereum Sepolia: https://sepolia.etherscan.io/address/$ETHEREUM_BRIDGE_HUB
 - Katana Tatara: https://explorer.tatara.katana.network/address/$KATANA_CHILD_VAULT
 EOF
 
@@ -180,17 +180,17 @@ if [ -d "frontend" ]; then
     cat > frontend/.env.local << EOF
 # autoUSD Frontend Configuration
 NEXT_PUBLIC_MOTHER_VAULT=$MOTHER_VAULT_BASE
-NEXT_PUBLIC_BRIDGE_VAULT=$BRIDGE_VAULT_POLYGON
+NEXT_PUBLIC_ETHEREUM_BRIDGE_HUB=$ETHEREUM_BRIDGE_HUB
 NEXT_PUBLIC_KATANA_CHILD_VAULT=$KATANA_CHILD_VAULT
 
 # Chain IDs
 NEXT_PUBLIC_BASE_SEPOLIA_CHAIN_ID=84532
-NEXT_PUBLIC_POLYGON_AMOY_CHAIN_ID=80002
+NEXT_PUBLIC_ETHEREUM_SEPOLIA_CHAIN_ID=11155111
 NEXT_PUBLIC_KATANA_TATARA_CHAIN_ID=129399
 
 # RPC URLs
 NEXT_PUBLIC_BASE_RPC=$BASE_SEPOLIA_RPC_URL
-NEXT_PUBLIC_POLYGON_RPC=$POLYGON_AMOY_RPC_URL
+NEXT_PUBLIC_ETHEREUM_RPC=$ETHEREUM_SEPOLIA_RPC_URL
 NEXT_PUBLIC_KATANA_RPC=$KATANA_TATARA_RPC_URL
 EOF
     echo -e "${GREEN}✅ Frontend configuration updated${NC}"
@@ -202,8 +202,8 @@ echo "====================="
 echo ""
 echo "Next Steps:"
 echo "1. Test deposit on Base Sepolia: https://sepolia.basescan.org/address/$MOTHER_VAULT_BASE"
-echo "2. Bridge to Katana using: https://bridge.katana.network/"
-echo "3. Monitor on Tatara: https://explorer.tatara.katana.network/address/$KATANA_CHILD_VAULT"
+echo "2. Bridge through Ethereum Hub: https://sepolia.etherscan.io/address/$ETHEREUM_BRIDGE_HUB"
+echo "3. Monitor yield on Katana: https://explorer.tatara.katana.network/address/$KATANA_CHILD_VAULT"
 echo ""
 echo "To start local testing:"
 echo "  cd katana-kit && bun run start:anvil katana"

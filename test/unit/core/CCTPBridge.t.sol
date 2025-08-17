@@ -23,10 +23,11 @@ contract CCTPBridgeTest is Test {
     address public recipient = address(0x4);
     address public childVault = address(0x5);
 
-    uint256 public constant BASE_CHAIN_ID = 8453;
-    uint256 public constant ARBITRUM_CHAIN_ID = 42_161;
-    uint32 public constant BASE_DOMAIN = 6; // CCTP v2 domain for Base
-    uint32 public constant ARBITRUM_DOMAIN = 3; // CCTP v2 domain for Arbitrum
+    uint256 public constant BASE_SEPOLIA_CHAIN_ID = 84532;
+    uint256 public constant ETHEREUM_SEPOLIA_CHAIN_ID = 11155111;
+    uint256 public constant KATANA_CHAIN_ID = 129399;
+    uint32 public constant BASE_SEPOLIA_DOMAIN = 6; // CCTP v2 domain for Base Sepolia
+    uint32 public constant ETHEREUM_SEPOLIA_DOMAIN = 0; // CCTP v2 domain for Ethereum Sepolia
     uint32 public constant KATANA_DOMAIN = 100; // Custom domain for Katana (not CCTP)
 
     event BridgeInitiated(
@@ -65,10 +66,10 @@ contract CCTPBridgeTest is Test {
         assertTrue(bridge.hasRole(bridge.DEFAULT_ADMIN_ROLE(), admin));
         assertTrue(bridge.hasRole(bridge.PAUSER_ROLE(), admin));
 
-        assertEq(bridge.chainToDomain(BASE_CHAIN_ID), BASE_DOMAIN);
-        assertEq(bridge.chainToDomain(ARBITRUM_CHAIN_ID), ARBITRUM_DOMAIN);
-        assertTrue(bridge.supportedDomains(BASE_DOMAIN));
-        assertTrue(bridge.supportedDomains(ARBITRUM_DOMAIN));
+        assertEq(bridge.chainToDomain(BASE_SEPOLIA_CHAIN_ID), BASE_SEPOLIA_DOMAIN);
+        assertEq(bridge.chainToDomain(ETHEREUM_SEPOLIA_CHAIN_ID), ETHEREUM_SEPOLIA_DOMAIN);
+        assertTrue(bridge.supportedDomains(BASE_SEPOLIA_DOMAIN));
+        assertTrue(bridge.supportedDomains(ETHEREUM_SEPOLIA_DOMAIN));
     }
 
     function test_BridgeUSDC() public {
@@ -80,7 +81,7 @@ contract CCTPBridgeTest is Test {
         uint256 userBalanceBefore = usdc.balanceOf(user);
         uint256 bridgeBalanceBefore = usdc.balanceOf(address(bridge));
 
-        uint64 nonce = bridge.bridgeUSDC(amount, ARBITRUM_CHAIN_ID, recipient);
+        uint64 nonce = bridge.bridgeUSDC(amount, ETHEREUM_SEPOLIA_CHAIN_ID, recipient);
         vm.stopPrank();
 
         assertTrue(nonce > 0);
@@ -95,21 +96,21 @@ contract CCTPBridgeTest is Test {
         uint256 amount = 0.5e6;
 
         vm.expectRevert(abi.encodeWithSelector(CCTPBridge.AmountTooLow.selector, amount));
-        bridge.bridgeUSDC(amount, ARBITRUM_CHAIN_ID, recipient);
+        bridge.bridgeUSDC(amount, ETHEREUM_SEPOLIA_CHAIN_ID, recipient);
     }
 
     function test_BridgeUSDC_RevertAmountTooHigh() public {
         uint256 amount = 2_000_000e6;
 
         vm.expectRevert(abi.encodeWithSelector(CCTPBridge.AmountTooHigh.selector, amount));
-        bridge.bridgeUSDC(amount, ARBITRUM_CHAIN_ID, recipient);
+        bridge.bridgeUSDC(amount, ETHEREUM_SEPOLIA_CHAIN_ID, recipient);
     }
 
     function test_BridgeUSDC_RevertInvalidRecipient() public {
         uint256 amount = 100e6;
 
         vm.expectRevert(abi.encodeWithSelector(CCTPBridge.InvalidRecipient.selector, address(0)));
-        bridge.bridgeUSDC(amount, ARBITRUM_CHAIN_ID, address(0));
+        bridge.bridgeUSDC(amount, ETHEREUM_SEPOLIA_CHAIN_ID, address(0));
     }
 
     function test_BridgeUSDC_RevertUnsupportedDomain() public {
@@ -137,7 +138,7 @@ contract CCTPBridgeTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(IERC20Errors.ERC20InsufficientBalance.selector, user, 1_000_000e6, amount)
         );
-        bridge.bridgeUSDC(amount, ARBITRUM_CHAIN_ID, recipient);
+        bridge.bridgeUSDC(amount, ETHEREUM_SEPOLIA_CHAIN_ID, recipient);
         vm.stopPrank();
     }
 
@@ -145,8 +146,8 @@ contract CCTPBridgeTest is Test {
         // Mock a CCTP message
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 12_345,
             sender: bytes32(uint256(uint160(user))),
             recipient: bytes32(uint256(uint160(recipient))),
@@ -177,7 +178,7 @@ contract CCTPBridgeTest is Test {
         vm.prank(user);
         usdc.transfer(address(bridge), amount);
         
-        uint64 nonce = bridge.bridgeUSDC(amount, ARBITRUM_CHAIN_ID, recipient);
+        uint64 nonce = bridge.bridgeUSDC(amount, ETHEREUM_SEPOLIA_CHAIN_ID, recipient);
         
         vm.warp(block.timestamp + 1 hours + 1);
         
@@ -204,7 +205,7 @@ contract CCTPBridgeTest is Test {
     }
 
     function test_ConfigureDomain() public {
-        uint256 newChainId = 137;
+        uint256 newChainId = KATANA_CHAIN_ID;
         uint32 newDomain = 7;
 
         vm.prank(admin);
@@ -217,9 +218,9 @@ contract CCTPBridgeTest is Test {
 
     function test_SetSupportedDomain() public {
         vm.prank(admin);
-        bridge.setSupportedDomain(BASE_DOMAIN, false);
+        bridge.setSupportedDomain(BASE_SEPOLIA_DOMAIN, false);
 
-        assertFalse(bridge.supportedDomains(BASE_DOMAIN));
+        assertFalse(bridge.supportedDomains(BASE_SEPOLIA_DOMAIN));
     }
 
     function test_SetBridgeLimits() public {
@@ -240,7 +241,7 @@ contract CCTPBridgeTest is Test {
         assertTrue(bridge.paused());
 
         vm.expectRevert(abi.encodeWithSignature("EnforcedPause()"));
-        bridge.bridgeUSDC(100e6, ARBITRUM_CHAIN_ID, recipient);
+        bridge.bridgeUSDC(100e6, ETHEREUM_SEPOLIA_CHAIN_ID, recipient);
     }
 
     function test_Unpause() public {
@@ -275,7 +276,7 @@ contract CCTPBridgeTest is Test {
         vm.startPrank(user);
         usdc.approve(address(bridge), amount);
 
-        uint64 nonce = bridge.bridgeUSDC(amount, ARBITRUM_CHAIN_ID, recipient_);
+        uint64 nonce = bridge.bridgeUSDC(amount, ETHEREUM_SEPOLIA_CHAIN_ID, recipient_);
         vm.stopPrank();
 
         // Verify nonce was returned
@@ -290,8 +291,8 @@ contract CCTPBridgeTest is Test {
         // Create CCTP message destined for MotherVault
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 12_345,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(address(motherVault)))),
@@ -304,13 +305,13 @@ contract CCTPBridgeTest is Test {
         vm.expectCall(
             address(motherVault),
             abi.encodeWithSignature(
-                "handleCCTPReceive(uint256,uint32,bytes32)", amount, ARBITRUM_DOMAIN, keccak256(messageBody)
+                "handleCCTPReceive(uint256,uint32,bytes32)", amount, ETHEREUM_SEPOLIA_DOMAIN, keccak256(messageBody)
             )
         );
 
         // Execute as TokenMessenger
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
         // Verify USDC was transferred to recipient
         assertEq(usdc.balanceOf(address(motherVault)), 500_000e6 + amount);
@@ -322,8 +323,8 @@ contract CCTPBridgeTest is Test {
         // Create CCTP message for MotherVault that will revert on callback
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 12_346,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(address(motherVault)))),
@@ -337,7 +338,7 @@ contract CCTPBridgeTest is Test {
 
         // Transfer should still succeed despite callback failure
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
         // Verify USDC was still transferred despite callback failure
         assertEq(usdc.balanceOf(address(motherVault)), 500_000e6 + amount);
@@ -349,8 +350,8 @@ contract CCTPBridgeTest is Test {
         // Create CCTP message destined for EOA (no code)
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 12_347,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(recipient))),
@@ -363,7 +364,7 @@ contract CCTPBridgeTest is Test {
 
         // Execute as TokenMessenger
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
         // Verify USDC was transferred normally
         assertEq(usdc.balanceOf(recipient), initialBalance + amount);
@@ -381,8 +382,8 @@ contract CCTPBridgeTest is Test {
             // Create unique CCTP message
             CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
                 version: 0,
-                sourceDomain: ARBITRUM_DOMAIN,
-                destinationDomain: BASE_DOMAIN,
+                sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+                destinationDomain: BASE_SEPOLIA_DOMAIN,
                 nonce: uint64(12_350 + i),
                 sender: bytes32(uint256(uint160(childVault))),
                 recipient: bytes32(uint256(uint160(address(motherVault)))),
@@ -393,7 +394,7 @@ contract CCTPBridgeTest is Test {
 
             // Execute receive
             vm.prank(address(tokenMessenger));
-            bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+            bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
             totalAmount += amounts[i];
 
@@ -410,8 +411,8 @@ contract CCTPBridgeTest is Test {
 
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 12_348,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(address(motherVault)))),
@@ -423,20 +424,20 @@ contract CCTPBridgeTest is Test {
 
         // First message succeeds
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
         // Second identical message should revert
         vm.expectRevert(abi.encodeWithSelector(CCTPBridge.MessageAlreadyProcessed.selector, messageHash));
 
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
     }
 
     function test_HandleReceiveMessage_RevertUnauthorizedCaller() public {
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 12_349,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(recipient))),
@@ -448,7 +449,7 @@ contract CCTPBridgeTest is Test {
         // Should revert when called by unauthorized address
         vm.expectRevert("Only TokenMessenger");
         vm.prank(user);
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
     }
 
     function test_HandleReceiveMessage_RevertUnsupportedDomain() public {
@@ -457,7 +458,7 @@ contract CCTPBridgeTest is Test {
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
             sourceDomain: unsupportedDomain,
-            destinationDomain: BASE_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 12_350,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(recipient))),
@@ -476,8 +477,8 @@ contract CCTPBridgeTest is Test {
 
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 12_351,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(recipient))),
@@ -488,10 +489,10 @@ contract CCTPBridgeTest is Test {
         bytes32 messageHash = keccak256(messageBody);
 
         vm.expectEmit(true, true, false, true);
-        emit BridgeCompleted(messageHash, amount, ARBITRUM_DOMAIN, recipient);
+        emit BridgeCompleted(messageHash, amount, ETHEREUM_SEPOLIA_DOMAIN, recipient);
 
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
     }
 
     function test_HandleReceiveMessage_ClearsPendingTransfer() public {
@@ -502,8 +503,8 @@ contract CCTPBridgeTest is Test {
         // Note: This requires access to internal state - in real tests you'd set it up through bridgeUSDC
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: nonce,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(recipient))),
@@ -513,7 +514,7 @@ contract CCTPBridgeTest is Test {
         bytes memory messageBody = abi.encode(cctpMessage);
 
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
         // Verify transfer was processed successfully
         assertEq(usdc.balanceOf(recipient), amount);
@@ -528,17 +529,17 @@ contract CCTPBridgeTest is Test {
 
         // Setup mother vault with deployed funds to track accounting changes
         usdc.mint(address(motherVault), 1000e6);
-        motherVault.setDeployedAmount(ARBITRUM_DOMAIN, 500e6); // Simulate deployed funds
+        motherVault.setDeployedAmount(ETHEREUM_SEPOLIA_DOMAIN, 500e6); // Simulate deployed funds
 
-        uint256 initialDeployed = motherVault.getDeployedAmount(ARBITRUM_DOMAIN);
+        uint256 initialDeployed = motherVault.getDeployedAmount(ETHEREUM_SEPOLIA_DOMAIN);
         uint256 initialTotalIdle = motherVault.getTotalIdle();
         uint256 initialTotalDeployed = motherVault.getTotalDeployed();
 
         // Create CCTP message destined for MotherVault
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 99_999,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(address(motherVault)))),
@@ -550,7 +551,7 @@ contract CCTPBridgeTest is Test {
 
         // Execute as TokenMessenger
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
         // Verify USDC was transferred to MotherVault
         assertEq(usdc.balanceOf(address(motherVault)), initialMotherVaultBalance + 1000e6 + amount);
@@ -558,7 +559,7 @@ contract CCTPBridgeTest is Test {
         // Verify callback was made and accounting updated in MotherVault
         assertTrue(motherVault.wasCallbackCalled(), "Callback should have been called");
         assertEq(motherVault.getLastCallbackAmount(), amount, "Callback amount should match");
-        assertEq(motherVault.getLastCallbackDomain(), ARBITRUM_DOMAIN, "Callback domain should match");
+        assertEq(motherVault.getLastCallbackDomain(), ETHEREUM_SEPOLIA_DOMAIN, "Callback domain should match");
         assertEq(motherVault.getLastCallbackHash(), messageHash, "Callback hash should match");
     }
 
@@ -569,14 +570,14 @@ contract CCTPBridgeTest is Test {
         usdc.mint(address(motherVault), 500e6);
         motherVault.setTotalIdle(200e6);
         motherVault.setTotalDeployed(300e6);
-        motherVault.setDeployedAmount(ARBITRUM_DOMAIN, 150e6);
+        motherVault.setDeployedAmount(ETHEREUM_SEPOLIA_DOMAIN, 150e6);
 
         uint256 initialTotalIdle = motherVault.getTotalIdle();
 
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 88_888,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(address(motherVault)))),
@@ -586,7 +587,7 @@ contract CCTPBridgeTest is Test {
         bytes memory messageBody = abi.encode(cctpMessage);
 
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
         // Verify buffer balance increased by amount received
         assertEq(motherVault.getTotalIdle(), initialTotalIdle + amount, "Buffer should increase by received amount");
@@ -599,14 +600,14 @@ contract CCTPBridgeTest is Test {
         usdc.mint(address(motherVault), 800e6);
         motherVault.setTotalIdle(400e6);
         motherVault.setTotalDeployed(400e6);
-        motherVault.setDeployedAmount(ARBITRUM_DOMAIN, 200e6);
+        motherVault.setDeployedAmount(ETHEREUM_SEPOLIA_DOMAIN, 200e6);
 
         uint256 initialTotalAssets = motherVault.getTotalAssets();
 
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 77_777,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(address(motherVault)))),
@@ -616,7 +617,7 @@ contract CCTPBridgeTest is Test {
         bytes memory messageBody = abi.encode(cctpMessage);
 
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
         // Total assets should remain the same (funds moved from deployed to idle)
         assertEq(motherVault.getTotalAssets(), initialTotalAssets, "Total assets should remain constant");
@@ -635,8 +636,8 @@ contract CCTPBridgeTest is Test {
 
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: nonce,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(address(motherVault)))),
@@ -650,7 +651,7 @@ contract CCTPBridgeTest is Test {
         assertFalse(bridge.processedMessages(messageHash), "Message should not be processed initially");
 
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
         // Verify message is now marked as processed
         assertTrue(bridge.processedMessages(messageHash), "Message should be marked as processed");
@@ -667,14 +668,14 @@ contract CCTPBridgeTest is Test {
         motherVault.setTotalSupply(1000e6); // 1:1 share ratio initially
         motherVault.setTotalIdle(500e6);
         motherVault.setTotalDeployed(500e6);
-        motherVault.setDeployedAmount(ARBITRUM_DOMAIN, 250e6);
+        motherVault.setDeployedAmount(ETHEREUM_SEPOLIA_DOMAIN, 250e6);
 
         uint256 initialSharePrice = motherVault.convertToAssets(1e6); // Price per 1 USDC worth of shares
 
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 66_666,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(address(motherVault)))),
@@ -684,7 +685,7 @@ contract CCTPBridgeTest is Test {
         bytes memory messageBody = abi.encode(cctpMessage);
 
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
         uint256 finalSharePrice = motherVault.convertToAssets(1e6);
 
@@ -711,7 +712,7 @@ contract CCTPBridgeTest is Test {
 
         // Bridge USDC
         vm.prank(user);
-        bridge.bridgeUSDC(amount, ARBITRUM_CHAIN_ID, recipient);
+        bridge.bridgeUSDC(amount, ETHEREUM_SEPOLIA_CHAIN_ID, recipient);
 
         // Verify allowance was reset to 0 first, then set to amount
         // The final allowance should be 0 since tokens were transferred
@@ -727,7 +728,7 @@ contract CCTPBridgeTest is Test {
         usdc.approve(address(bridge), amount);
 
         vm.prank(user);
-        uint64 nonce = bridge.bridgeUSDC(amount, ARBITRUM_CHAIN_ID, recipient);
+        uint64 nonce = bridge.bridgeUSDC(amount, ETHEREUM_SEPOLIA_CHAIN_ID, recipient);
 
         // Move time forward to allow retry
         vm.warp(block.timestamp + 2 minutes);
@@ -757,7 +758,7 @@ contract CCTPBridgeTest is Test {
         usdc.approve(address(bridge), amount);
 
         vm.prank(user);
-        uint64 nonce = bridge.bridgeUSDC(amount, ARBITRUM_CHAIN_ID, recipient);
+        uint64 nonce = bridge.bridgeUSDC(amount, ETHEREUM_SEPOLIA_CHAIN_ID, recipient);
 
         // Set allowance to non-zero to test reset
         vm.prank(address(bridge));
@@ -791,17 +792,17 @@ contract CCTPBridgeTest is Test {
         usdc.mint(address(motherVault), 1000e6);
         motherVault.setTotalIdle(200e6);
         motherVault.setTotalDeployed(800e6);
-        motherVault.setDeployedAmount(ARBITRUM_DOMAIN, 400e6);
+        motherVault.setDeployedAmount(ETHEREUM_SEPOLIA_DOMAIN, 400e6);
 
         uint256 initialTotalIdle = motherVault.getTotalIdle();
         uint256 initialTotalDeployed = motherVault.getTotalDeployed();
-        uint256 initialArbitrumDeployed = motherVault.getDeployedAmount(ARBITRUM_DOMAIN);
+        uint256 initialArbitrumDeployed = motherVault.getDeployedAmount(ETHEREUM_SEPOLIA_DOMAIN);
 
         for (uint256 i = 0; i < amounts.length; i++) {
             CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
                 version: 0,
-                sourceDomain: ARBITRUM_DOMAIN,
-                destinationDomain: BASE_DOMAIN,
+                sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+                destinationDomain: BASE_SEPOLIA_DOMAIN,
                 nonce: uint64(50_000 + i),
                 sender: bytes32(uint256(uint160(childVault))),
                 recipient: bytes32(uint256(uint160(address(motherVault)))),
@@ -811,7 +812,7 @@ contract CCTPBridgeTest is Test {
             bytes memory messageBody = abi.encode(cctpMessage);
 
             vm.prank(address(tokenMessenger));
-            bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+            bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
             totalReceived += amounts[i];
 
@@ -834,7 +835,7 @@ contract CCTPBridgeTest is Test {
 
         // Verify final arbitrum deployed amount
         assertEq(
-            motherVault.getDeployedAmount(ARBITRUM_DOMAIN),
+            motherVault.getDeployedAmount(ETHEREUM_SEPOLIA_DOMAIN),
             initialArbitrumDeployed - totalReceived,
             "Arbitrum deployed amount should decrease by total received"
         );
@@ -847,18 +848,18 @@ contract CCTPBridgeTest is Test {
         usdc.mint(address(motherVault), 1000e6);
         motherVault.setTotalIdle(100e6);
         motherVault.setTotalDeployed(900e6);
-        motherVault.setDeployedAmount(ARBITRUM_DOMAIN, 450e6);
+        motherVault.setDeployedAmount(ETHEREUM_SEPOLIA_DOMAIN, 450e6);
         motherVault.setDeployedAmount(KATANA_DOMAIN, 450e6);
         motherVault.setRebalanceInProgress(true); // Simulate active rebalancing
 
         uint256 initialTotalIdle = motherVault.getTotalIdle();
         uint256 initialTotalDeployed = motherVault.getTotalDeployed();
-        uint256 initialArbitrumDeployed = motherVault.getDeployedAmount(ARBITRUM_DOMAIN);
+        uint256 initialArbitrumDeployed = motherVault.getDeployedAmount(ETHEREUM_SEPOLIA_DOMAIN);
 
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 40_001,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(address(motherVault)))),
@@ -868,7 +869,7 @@ contract CCTPBridgeTest is Test {
         bytes memory messageBody = abi.encode(cctpMessage);
 
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
         // Verify accounting is correct even during rebalancing
         assertEq(
@@ -880,7 +881,7 @@ contract CCTPBridgeTest is Test {
             "Deployed should decrease during rebalancing"
         );
         assertEq(
-            motherVault.getDeployedAmount(ARBITRUM_DOMAIN),
+            motherVault.getDeployedAmount(ETHEREUM_SEPOLIA_DOMAIN),
             initialArbitrumDeployed - receiveAmount,
             "Arbitrum deployed should decrease"
         );
@@ -899,7 +900,7 @@ contract CCTPBridgeTest is Test {
         usdc.mint(address(motherVault), 1000e6);
         motherVault.setTotalIdle(50e6); // Low idle funds
         motherVault.setTotalDeployed(950e6);
-        motherVault.setDeployedAmount(ARBITRUM_DOMAIN, 475e6);
+        motherVault.setDeployedAmount(ETHEREUM_SEPOLIA_DOMAIN, 475e6);
         motherVault.setPendingWithdrawals(200e6); // Simulate pending withdrawals
 
         uint256 initialAvailableForWithdrawal = motherVault.getAvailableForWithdrawal();
@@ -907,8 +908,8 @@ contract CCTPBridgeTest is Test {
 
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 30_001,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(address(motherVault)))),
@@ -918,7 +919,7 @@ contract CCTPBridgeTest is Test {
         bytes memory messageBody = abi.encode(cctpMessage);
 
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
         // Verify idle funds increased
         assertEq(motherVault.getTotalIdle(), initialTotalIdle + receiveAmount, "Idle should increase");
@@ -940,7 +941,7 @@ contract CCTPBridgeTest is Test {
         usdc.mint(address(motherVault), 1000e6);
         motherVault.setTotalIdle(50e6);
         motherVault.setTotalDeployed(950e6);
-        motherVault.setDeployedAmount(ARBITRUM_DOMAIN, receiveAmount); // Ensure sufficient deployed
+        motherVault.setDeployedAmount(ETHEREUM_SEPOLIA_DOMAIN, receiveAmount); // Ensure sufficient deployed
         motherVault.setBufferManagementEnabled(true);
         motherVault.setBufferPercentage(200); // 2% buffer requirement for easier testing
         motherVault.setBufferTarget(20e6); // Set explicit buffer target
@@ -949,8 +950,8 @@ contract CCTPBridgeTest is Test {
 
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 20_001,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(address(motherVault)))),
@@ -960,7 +961,7 @@ contract CCTPBridgeTest is Test {
         bytes memory messageBody = abi.encode(cctpMessage);
 
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
         // Verify receive was processed even if it exceeds buffer limits
         assertEq(motherVault.getTotalIdle(), initialTotalIdle + receiveAmount, "Large receive should be processed");
@@ -979,8 +980,8 @@ contract CCTPBridgeTest is Test {
 
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 10_001,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(recipient))),
@@ -992,7 +993,7 @@ contract CCTPBridgeTest is Test {
         // Should revert when called by unauthorized address (simulating invalid attestation)
         vm.expectRevert("Only TokenMessenger");
         vm.prank(user);
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
         // Should revert for unsupported domain (simulating invalid source)
         uint32 unsupportedDomain = 99;
@@ -1008,8 +1009,8 @@ contract CCTPBridgeTest is Test {
 
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 10_002,
             sender: bytes32(uint256(uint160(nonWhitelistedSender))),
             recipient: bytes32(uint256(uint160(recipient))),
@@ -1021,7 +1022,7 @@ contract CCTPBridgeTest is Test {
         // Note: Current implementation doesn't check sender whitelist, but transfer should still succeed
         // This is because CCTP itself provides the security guarantees
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
         // Verify transfer succeeded (CCTP provides security, not bridge contract)
         assertEq(usdc.balanceOf(recipient), amount);
@@ -1037,7 +1038,7 @@ contract CCTPBridgeTest is Test {
         usdc.mint(address(motherVault), 1000e6);
         motherVault.setTotalIdle(300e6);
         motherVault.setTotalDeployed(700e6);
-        motherVault.setDeployedAmount(ARBITRUM_DOMAIN, 350e6);
+        motherVault.setDeployedAmount(ETHEREUM_SEPOLIA_DOMAIN, 350e6);
 
         // Verify initial accounting equation
         assertEq(
@@ -1048,8 +1049,8 @@ contract CCTPBridgeTest is Test {
 
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 15_001,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(address(motherVault)))),
@@ -1059,7 +1060,7 @@ contract CCTPBridgeTest is Test {
         bytes memory messageBody = abi.encode(cctpMessage);
 
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
         // Verify accounting equation still holds after receive
         assertEq(
@@ -1079,7 +1080,7 @@ contract CCTPBridgeTest is Test {
         usdc.mint(address(motherVault), 1000e6);
         motherVault.setTotalIdle(400e6);
         motherVault.setTotalDeployed(600e6);
-        motherVault.setDeployedAmount(ARBITRUM_DOMAIN, 300e6);
+        motherVault.setDeployedAmount(ETHEREUM_SEPOLIA_DOMAIN, 300e6);
         motherVault.setManagementFeeBps(50); // 0.5% fee
 
         uint256 initialTotalAssets = motherVault.getTotalAssets();
@@ -1087,8 +1088,8 @@ contract CCTPBridgeTest is Test {
 
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 25_001,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(address(motherVault)))),
@@ -1098,7 +1099,7 @@ contract CCTPBridgeTest is Test {
         bytes memory messageBody = abi.encode(cctpMessage);
 
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
         uint256 finalTotalAssets = motherVault.getTotalAssets();
         uint256 finalFeeCalculation = motherVault.calculateManagementFee();
@@ -1117,7 +1118,7 @@ contract CCTPBridgeTest is Test {
         usdc.mint(address(motherVault), 1000e6);
         motherVault.setTotalIdle(200e6);
         motherVault.setTotalDeployed(800e6);
-        motherVault.setDeployedAmount(ARBITRUM_DOMAIN, 400e6);
+        motherVault.setDeployedAmount(ETHEREUM_SEPOLIA_DOMAIN, 400e6);
 
         // Simulate withdrawal queue state
         uint256[] memory queuedAmounts = new uint256[](3);
@@ -1131,8 +1132,8 @@ contract CCTPBridgeTest is Test {
 
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 35_001,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(address(motherVault)))),
@@ -1142,7 +1143,7 @@ contract CCTPBridgeTest is Test {
         bytes memory messageBody = abi.encode(cctpMessage);
 
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
         // Withdrawal queue should not be affected by accounting updates
         assertEq(motherVault.getWithdrawalQueueSize(), initialQueueSize, "Queue size should be unchanged");
@@ -1157,12 +1158,12 @@ contract CCTPBridgeTest is Test {
 
     function test_EventEmission_USDCReceivedEvent() public {
         uint256 amount = 60e6;
-        uint32 sourceDomain = ARBITRUM_DOMAIN;
+        uint32 sourceDomain = ETHEREUM_SEPOLIA_DOMAIN;
 
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
             sourceDomain: sourceDomain,
-            destinationDomain: BASE_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 45_001,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(address(motherVault)))),
@@ -1187,13 +1188,13 @@ contract CCTPBridgeTest is Test {
         usdc.mint(address(motherVault), 1000e6);
         motherVault.setTotalIdle(100e6);
         motherVault.setTotalDeployed(900e6);
-        motherVault.setDeployedAmount(ARBITRUM_DOMAIN, 450e6);
+        motherVault.setDeployedAmount(ETHEREUM_SEPOLIA_DOMAIN, 450e6);
         motherVault.setBufferManagementEnabled(true);
 
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 55_001,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(address(motherVault)))),
@@ -1204,10 +1205,10 @@ contract CCTPBridgeTest is Test {
 
         // Expect FundsReceivedFromChild event from MotherVault
         vm.expectEmit(true, false, false, true);
-        emit FundsReceivedFromChild(ARBITRUM_DOMAIN, amount);
+        emit FundsReceivedFromChild(ETHEREUM_SEPOLIA_DOMAIN, amount);
 
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
     }
 
     function test_EventEmission_StateChangeEvents() public {
@@ -1217,7 +1218,7 @@ contract CCTPBridgeTest is Test {
         usdc.mint(address(motherVault), 1000e6);
         motherVault.setTotalIdle(50e6);
         motherVault.setTotalDeployed(950e6);
-        motherVault.setDeployedAmount(ARBITRUM_DOMAIN, 400e6);
+        motherVault.setDeployedAmount(ETHEREUM_SEPOLIA_DOMAIN, 400e6);
         motherVault.setBufferManagementEnabled(true);
 
         // This receive should change buffer status from insufficient to sufficient
@@ -1225,8 +1226,8 @@ contract CCTPBridgeTest is Test {
 
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 65_001,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(address(motherVault)))),
@@ -1236,7 +1237,7 @@ contract CCTPBridgeTest is Test {
         bytes memory messageBody = abi.encode(cctpMessage);
 
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
         bool finalBufferStatus = motherVault.isBufferSufficient();
 
@@ -1253,8 +1254,8 @@ contract CCTPBridgeTest is Test {
 
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 95_001,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(address(motherVault)))),
@@ -1269,7 +1270,7 @@ contract CCTPBridgeTest is Test {
 
         // Should handle zero amount gracefully
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
         // Balance should remain unchanged
         assertEq(
@@ -1294,12 +1295,12 @@ contract CCTPBridgeTest is Test {
         // Reset mother vault state for this test
         motherVault.setTotalIdle(100e6);
         motherVault.setTotalDeployed(900e6);
-        motherVault.setDeployedAmount(ARBITRUM_DOMAIN, amount); // Ensure sufficient deployed amount
+        motherVault.setDeployedAmount(ETHEREUM_SEPOLIA_DOMAIN, amount); // Ensure sufficient deployed amount
 
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 85_001,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(address(motherVault)))),
@@ -1312,7 +1313,7 @@ contract CCTPBridgeTest is Test {
         uint256 initialTotalIdle = motherVault.getTotalIdle();
 
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
         // Verify large amount was processed correctly
         assertEq(usdc.balanceOf(address(motherVault)), initialBalance + amount, "Large amount should be transferred");
@@ -1328,8 +1329,8 @@ contract CCTPBridgeTest is Test {
 
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 12_999,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(recipient))),
@@ -1341,7 +1342,7 @@ contract CCTPBridgeTest is Test {
         // Test 1: Wrong caller should revert
         vm.expectRevert("Only TokenMessenger");
         vm.prank(user);
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
         // Test 2: Unsupported domain should revert
         uint32 unsupportedDomain = 99;
@@ -1351,13 +1352,13 @@ contract CCTPBridgeTest is Test {
 
         // Test 3: Duplicate message should revert
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
         // Second call with same message should revert
         bytes32 messageHash = keccak256(messageBody);
         vm.expectRevert(abi.encodeWithSelector(CCTPBridge.MessageAlreadyProcessed.selector, messageHash));
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
     }
 
     function test_HandleReceiveMessage_AtomicStateChanges() public {
@@ -1367,12 +1368,12 @@ contract CCTPBridgeTest is Test {
         usdc.mint(address(motherVault), 1000e6);
         motherVault.setTotalIdle(200e6);
         motherVault.setTotalDeployed(800e6);
-        motherVault.setDeployedAmount(ARBITRUM_DOMAIN, 400e6);
+        motherVault.setDeployedAmount(ETHEREUM_SEPOLIA_DOMAIN, 400e6);
 
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 13_999,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(address(motherVault)))),
@@ -1385,20 +1386,20 @@ contract CCTPBridgeTest is Test {
         // Create a hook to verify state mid-execution using expectCall
         vm.expectCall(
             address(motherVault),
-            abi.encodeWithSignature("handleCCTPReceive(uint256,uint32,bytes32)", amount, ARBITRUM_DOMAIN, messageHash)
+            abi.encodeWithSignature("handleCCTPReceive(uint256,uint32,bytes32)", amount, ETHEREUM_SEPOLIA_DOMAIN, messageHash)
         );
 
         uint256 initialBalance = usdc.balanceOf(address(motherVault));
 
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
         // Verify all state changes are consistent
         assertEq(usdc.balanceOf(address(motherVault)), initialBalance + amount, "USDC balance should be updated");
         assertTrue(bridge.processedMessages(messageHash), "Message should be marked processed");
         assertTrue(motherVault.wasCallbackCalled(), "Callback should be called");
         assertEq(motherVault.getLastCallbackAmount(), amount, "Callback amount should match");
-        assertEq(motherVault.getLastCallbackDomain(), ARBITRUM_DOMAIN, "Callback domain should match");
+        assertEq(motherVault.getLastCallbackDomain(), ETHEREUM_SEPOLIA_DOMAIN, "Callback domain should match");
         assertEq(motherVault.getLastCallbackHash(), messageHash, "Callback hash should match");
     }
 
@@ -1409,8 +1410,8 @@ contract CCTPBridgeTest is Test {
         // CCTP message from unexpected sender
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 14_999,
             sender: bytes32(uint256(uint160(unexpectedSender))),
             recipient: bytes32(uint256(uint160(address(motherVault)))),
@@ -1423,7 +1424,7 @@ contract CCTPBridgeTest is Test {
 
         // Should handle gracefully - CCTP protocol itself provides security
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
         // Transfer should succeed (CCTP guarantees legitimacy)
         assertEq(
@@ -1442,7 +1443,7 @@ contract CCTPBridgeTest is Test {
         usdc.mint(address(motherVault), 1000e6);
         motherVault.setTotalIdle(30e6); // Below buffer target
         motherVault.setTotalDeployed(970e6);
-        motherVault.setDeployedAmount(ARBITRUM_DOMAIN, receiveAmount); // Ensure sufficient deployed amount
+        motherVault.setDeployedAmount(ETHEREUM_SEPOLIA_DOMAIN, receiveAmount); // Ensure sufficient deployed amount
         motherVault.setBufferManagementEnabled(true);
         motherVault.setBufferPercentage(200); // 2% buffer requirement for easier testing
         motherVault.setBufferTarget(50e6); // Set explicit buffer target higher than current idle
@@ -1452,8 +1453,8 @@ contract CCTPBridgeTest is Test {
 
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 16_999,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(address(motherVault)))),
@@ -1463,7 +1464,7 @@ contract CCTPBridgeTest is Test {
         bytes memory messageBody = abi.encode(cctpMessage);
 
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
         // Verify buffer status improved
         bool finalBufferSufficient = motherVault.isBufferSufficient();
@@ -1490,7 +1491,7 @@ contract CCTPBridgeTest is Test {
         usdc.mint(address(motherVault), 1000e6);
         motherVault.setTotalIdle(100e6);
         motherVault.setTotalDeployed(900e6);
-        motherVault.setDeployedAmount(ARBITRUM_DOMAIN, 450e6);
+        motherVault.setDeployedAmount(ETHEREUM_SEPOLIA_DOMAIN, 450e6);
 
         uint256 initialTotalIdle = motherVault.getTotalIdle();
         uint256 initialTotalDeployed = motherVault.getTotalDeployed();
@@ -1498,8 +1499,8 @@ contract CCTPBridgeTest is Test {
         for (uint256 i = 0; i < amounts.length; i++) {
             CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
                 version: 0,
-                sourceDomain: ARBITRUM_DOMAIN,
-                destinationDomain: BASE_DOMAIN,
+                sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+                destinationDomain: BASE_SEPOLIA_DOMAIN,
                 nonce: uint64(17_000 + i),
                 sender: bytes32(uint256(uint160(childVault))),
                 recipient: bytes32(uint256(uint160(address(motherVault)))),
@@ -1512,7 +1513,7 @@ contract CCTPBridgeTest is Test {
             motherVault.resetCallbackTracking();
 
             vm.prank(address(tokenMessenger));
-            bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+            bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
             totalReceived += amounts[i];
 
@@ -1547,12 +1548,12 @@ contract CCTPBridgeTest is Test {
 
     function test_HandleReceiveMessage_EventEmissionComplete() public {
         uint256 amount = 80e6;
-        uint32 sourceDomain = ARBITRUM_DOMAIN;
+        uint32 sourceDomain = ETHEREUM_SEPOLIA_DOMAIN;
 
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
             sourceDomain: sourceDomain,
-            destinationDomain: BASE_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 18_001,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(address(motherVault)))),
@@ -1578,8 +1579,8 @@ contract CCTPBridgeTest is Test {
 
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 19_001,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(address(motherVault)))),
@@ -1591,7 +1592,7 @@ contract CCTPBridgeTest is Test {
         uint256 gasBefore = gasleft();
 
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
         uint256 gasUsed = gasBefore - gasleft();
 
@@ -1605,8 +1606,8 @@ contract CCTPBridgeTest is Test {
 
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 20_001,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(address(motherVault)))),
@@ -1617,13 +1618,13 @@ contract CCTPBridgeTest is Test {
 
         // First call should succeed
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
         // Verify reentrancy protection (duplicate message should fail)
         bytes32 messageHash = keccak256(messageBody);
         vm.expectRevert(abi.encodeWithSelector(CCTPBridge.MessageAlreadyProcessed.selector, messageHash));
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
     }
 
     // ===== INTEGRATION TESTS =====
@@ -1645,12 +1646,12 @@ contract CCTPBridgeTest is Test {
 
         // Step 1: Deploy to child vault (simulated)
         vm.prank(admin);
-        motherVault.deployToChildVault(ARBITRUM_DOMAIN, deployAmount);
+        motherVault.deployToChildVault(ETHEREUM_SEPOLIA_DOMAIN, deployAmount);
 
         // Verify deployment accounting
         assertEq(motherVault.getCurrentBuffer(), initialTotalIdle - deployAmount);
         assertEq(motherVault.getTotalDeployed(), initialTotalDeployed + deployAmount);
-        assertEq(motherVault.getDeployedAmount(ARBITRUM_DOMAIN), deployAmount);
+        assertEq(motherVault.getDeployedAmount(ETHEREUM_SEPOLIA_DOMAIN), deployAmount);
 
         // Step 2: Simulate child vault processing and generating yield
         // (This would happen on the child chain)
@@ -1661,8 +1662,8 @@ contract CCTPBridgeTest is Test {
 
         CCTPBridge.CCTPMessage memory cctpMessage = CCTPBridge.CCTPMessage({
             version: 0,
-            sourceDomain: ARBITRUM_DOMAIN,
-            destinationDomain: BASE_DOMAIN,
+            sourceDomain: ETHEREUM_SEPOLIA_DOMAIN,
+            destinationDomain: BASE_SEPOLIA_DOMAIN,
             nonce: 75_001,
             sender: bytes32(uint256(uint160(childVault))),
             recipient: bytes32(uint256(uint160(address(motherVault)))),
@@ -1673,12 +1674,12 @@ contract CCTPBridgeTest is Test {
 
         // Step 4: Mother receives via CCTP
         vm.prank(address(tokenMessenger));
-        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        bridge.handleReceiveMessage(ETHEREUM_SEPOLIA_DOMAIN, bytes32(0), messageBody);
 
         // Verify final accounting
         uint256 finalTotalIdle = motherVault.getCurrentBuffer();
         uint256 finalTotalDeployed = motherVault.getTotalDeployed();
-        uint256 finalArbitrumDeployed = motherVault.getDeployedAmount(ARBITRUM_DOMAIN);
+        uint256 finalArbitrumDeployed = motherVault.getDeployedAmount(ETHEREUM_SEPOLIA_DOMAIN);
 
         // Account for what was received vs what was originally deployed
         uint256 stillDeployedOnArbitrum = deployAmount - totalReturn;

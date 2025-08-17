@@ -27,8 +27,9 @@ contract CrossChainMessengerTest is Test {
     address public childVault = address(0x2);
     address public user = address(0x3);
 
-    uint32 public constant BASE_DOMAIN = 8453;
-    uint32 public constant ARBITRUM_DOMAIN = 42_161;
+    uint32 public constant BASE_SEPOLIA_DOMAIN = 84532;
+    uint32 public constant ETHEREUM_SEPOLIA_DOMAIN = 11155111;
+    uint32 public constant KATANA_DOMAIN = 129399;
     bytes32 public constant TRUSTED_SENDER = bytes32(uint256(uint160(address(0x4))));
 
     event MessageSent(
@@ -59,7 +60,8 @@ contract CrossChainMessengerTest is Test {
 
         // Setup
         vm.startPrank(admin);
-        messenger.setTrustedSender(ARBITRUM_DOMAIN, TRUSTED_SENDER);
+        messenger.setTrustedSender(ETHEREUM_SEPOLIA_DOMAIN, TRUSTED_SENDER);
+        messenger.setTrustedSender(KATANA_DOMAIN, TRUSTED_SENDER);
         vm.stopPrank();
 
         // Fund accounts
@@ -83,7 +85,7 @@ contract CrossChainMessengerTest is Test {
         vm.startPrank(admin);
 
         ICrossChainMessenger.CrossChainMessage memory message = ICrossChainMessenger.CrossChainMessage({
-            targetChainId: ARBITRUM_DOMAIN,
+            targetChainId: ETHEREUM_SEPOLIA_DOMAIN,
             targetVault: childVault,
             messageType: ICrossChainMessenger.MessageType.DEPOSIT_REQUEST,
             payload: abi.encode(100e6),
@@ -108,7 +110,7 @@ contract CrossChainMessengerTest is Test {
 
         bytes memory largePayload = new bytes(11_000); // > MAX_MESSAGE_SIZE
         ICrossChainMessenger.CrossChainMessage memory message = ICrossChainMessenger.CrossChainMessage({
-            targetChainId: ARBITRUM_DOMAIN,
+            targetChainId: ETHEREUM_SEPOLIA_DOMAIN,
             targetVault: childVault,
             messageType: ICrossChainMessenger.MessageType.DEPOSIT_REQUEST,
             payload: largePayload,
@@ -144,7 +146,7 @@ contract CrossChainMessengerTest is Test {
         vm.startPrank(admin);
 
         ICrossChainMessenger.CrossChainMessage memory message = ICrossChainMessenger.CrossChainMessage({
-            targetChainId: ARBITRUM_DOMAIN,
+            targetChainId: ETHEREUM_SEPOLIA_DOMAIN,
             targetVault: childVault,
             messageType: ICrossChainMessenger.MessageType.DEPOSIT_REQUEST,
             payload: abi.encode(100e6),
@@ -170,9 +172,9 @@ contract CrossChainMessengerTest is Test {
         );
 
         vm.prank(address(mailbox));
-        messenger.handle(ARBITRUM_DOMAIN, TRUSTED_SENDER, encodedMessage);
+        messenger.handle(ETHEREUM_SEPOLIA_DOMAIN, TRUSTED_SENDER, encodedMessage);
 
-        bytes32 messageId = keccak256(abi.encodePacked(ARBITRUM_DOMAIN, TRUSTED_SENDER, encodedMessage));
+        bytes32 messageId = keccak256(abi.encodePacked(ETHEREUM_SEPOLIA_DOMAIN, TRUSTED_SENDER, encodedMessage));
         assertTrue(messenger.processedMessages(messageId));
 
         (bool processed, bool success) = messenger.getMessageStatus(messageId);
@@ -191,7 +193,7 @@ contract CrossChainMessengerTest is Test {
 
         vm.prank(user);
         vm.expectRevert("Only mailbox");
-        messenger.handle(ARBITRUM_DOMAIN, TRUSTED_SENDER, encodedMessage);
+        messenger.handle(ETHEREUM_SEPOLIA_DOMAIN, TRUSTED_SENDER, encodedMessage);
     }
 
     function test_Handle_RevertUntrustedDomain() public {
@@ -221,7 +223,7 @@ contract CrossChainMessengerTest is Test {
 
         vm.prank(address(mailbox));
         vm.expectRevert(abi.encodeWithSelector(CrossChainMessenger.UntrustedSender.selector, untrustedSender));
-        messenger.handle(ARBITRUM_DOMAIN, untrustedSender, encodedMessage);
+        messenger.handle(ETHEREUM_SEPOLIA_DOMAIN, untrustedSender, encodedMessage);
     }
 
     function test_Handle_RevertAlreadyProcessed() public {
@@ -234,11 +236,11 @@ contract CrossChainMessengerTest is Test {
         );
 
         vm.startPrank(address(mailbox));
-        messenger.handle(ARBITRUM_DOMAIN, TRUSTED_SENDER, encodedMessage);
+        messenger.handle(ETHEREUM_SEPOLIA_DOMAIN, TRUSTED_SENDER, encodedMessage);
 
-        bytes32 messageId = keccak256(abi.encodePacked(ARBITRUM_DOMAIN, TRUSTED_SENDER, encodedMessage));
+        bytes32 messageId = keccak256(abi.encodePacked(ETHEREUM_SEPOLIA_DOMAIN, TRUSTED_SENDER, encodedMessage));
         vm.expectRevert(abi.encodeWithSelector(ICrossChainMessenger.MessageAlreadyProcessed.selector, messageId));
-        messenger.handle(ARBITRUM_DOMAIN, TRUSTED_SENDER, encodedMessage);
+        messenger.handle(ETHEREUM_SEPOLIA_DOMAIN, TRUSTED_SENDER, encodedMessage);
         vm.stopPrank();
     }
 
@@ -256,7 +258,7 @@ contract CrossChainMessengerTest is Test {
 
         vm.prank(address(mailbox));
         vm.expectRevert(abi.encodeWithSelector(CrossChainMessenger.MessageExpired.selector, oldTimestamp + 7 days));
-        messenger.handle(ARBITRUM_DOMAIN, TRUSTED_SENDER, encodedMessage);
+        messenger.handle(ETHEREUM_SEPOLIA_DOMAIN, TRUSTED_SENDER, encodedMessage);
     }
 
     function test_Handle_AllMessageTypes() public {
@@ -276,9 +278,9 @@ contract CrossChainMessengerTest is Test {
                 abi.encode(messageTypes[i], address(motherVault), payload, uint256(i + 1), block.timestamp);
 
             vm.prank(address(mailbox));
-            messenger.handle(ARBITRUM_DOMAIN, TRUSTED_SENDER, encodedMessage);
+            messenger.handle(ETHEREUM_SEPOLIA_DOMAIN, TRUSTED_SENDER, encodedMessage);
 
-            bytes32 messageId = keccak256(abi.encodePacked(ARBITRUM_DOMAIN, TRUSTED_SENDER, encodedMessage));
+            bytes32 messageId = keccak256(abi.encodePacked(ETHEREUM_SEPOLIA_DOMAIN, TRUSTED_SENDER, encodedMessage));
             assertTrue(messenger.processedMessages(messageId));
         }
     }
@@ -315,7 +317,7 @@ contract CrossChainMessengerTest is Test {
     }
 
     function test_EstimateMessageFee() public view {
-        uint256 fee = messenger.estimateMessageFee(ARBITRUM_DOMAIN);
+        uint256 fee = messenger.estimateMessageFee(ETHEREUM_SEPOLIA_DOMAIN);
         assertEq(fee, 1000); // MockInterchainGasPaymaster returns 1000
     }
 
@@ -326,7 +328,7 @@ contract CrossChainMessengerTest is Test {
         assertTrue(messenger.paused());
 
         ICrossChainMessenger.CrossChainMessage memory message = ICrossChainMessenger.CrossChainMessage({
-            targetChainId: ARBITRUM_DOMAIN,
+            targetChainId: ETHEREUM_SEPOLIA_DOMAIN,
             targetVault: childVault,
             messageType: ICrossChainMessenger.MessageType.DEPOSIT_REQUEST,
             payload: abi.encode(100e6),
@@ -361,8 +363,8 @@ contract CrossChainMessengerTest is Test {
     function testFuzz_SendMessage(uint256 amount, uint256 targetChainId) public {
         vm.assume(amount > 0 && amount < 1000e6);
         vm.assume(targetChainId > 100 && targetChainId < 65_535); // Valid domain range, avoid existing
-        vm.assume(targetChainId != BASE_DOMAIN); // Avoid conflict with already configured domain
-        vm.assume(targetChainId != ARBITRUM_DOMAIN); // Avoid conflict with already configured domain
+        vm.assume(targetChainId != BASE_SEPOLIA_DOMAIN); // Avoid conflict with already configured domain
+        vm.assume(targetChainId != ETHEREUM_SEPOLIA_DOMAIN); // Avoid conflict with already configured domain
         vm.assume(targetChainId != 1 && targetChainId != 10); // Avoid ETH and Optimism
 
         vm.startPrank(admin);

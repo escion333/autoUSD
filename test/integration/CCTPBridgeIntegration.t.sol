@@ -29,11 +29,11 @@ contract CCTPBridgeIntegrationTest is Test {
 
     address public admin = address(0x1);
     address public user = address(0x2);
-    address public childVaultArbitrum = address(0x3);
+    address public childVaultEthereumSepolia = address(0x3);
     address public childVaultKatana = address(0x4);
 
-    uint32 public constant BASE_DOMAIN = 6; // CCTP v2 domain for Base
-    uint32 public constant ARBITRUM_DOMAIN = 3; // CCTP v2 domain for Arbitrum
+    uint32 public constant BASE_SEPOLIA_DOMAIN = 6; // CCTP v2 domain for Base Sepolia
+    uint32 public constant ETHEREUM_SEPOLIA_DOMAIN = 0; // CCTP v2 domain for Ethereum Sepolia
     uint32 public constant KATANA_DOMAIN = 100; // Custom domain for Katana (not CCTP)
 
     event BridgeCompleted(bytes32 indexed messageHash, uint256 amount, uint32 sourceDomain, address indexed recipient);
@@ -60,7 +60,7 @@ contract CCTPBridgeIntegrationTest is Test {
         usdc.mint(address(this), 100e6);
         usdc.approve(address(motherVault), 100e6);
         motherVault.initialize(address(messenger), address(cctpBridge));
-        motherVault.addChildVault(ARBITRUM_DOMAIN, childVaultArbitrum);
+        motherVault.addChildVault(ETHEREUM_SEPOLIA_DOMAIN, childVaultEthereumSepolia);
         motherVault.addChildVault(KATANA_DOMAIN, childVaultKatana);
 
         // Grant admin role to our admin address for later operations
@@ -75,10 +75,10 @@ contract CCTPBridgeIntegrationTest is Test {
         vm.startPrank(admin);
         // Configure domain mappings (CCTP domain -> Hyperlane domain)
         // We use the CCTP domain as both chain ID and Hyperlane domain for simplicity in tests
-        messenger.configureDomain(ARBITRUM_DOMAIN, ARBITRUM_DOMAIN);
+        messenger.configureDomain(ETHEREUM_SEPOLIA_DOMAIN, ETHEREUM_SEPOLIA_DOMAIN);
         messenger.configureDomain(KATANA_DOMAIN, KATANA_DOMAIN);
         // Set trusted senders
-        messenger.setTrustedSender(ARBITRUM_DOMAIN, bytes32(uint256(uint160(childVaultArbitrum))));
+        messenger.setTrustedSender(ETHEREUM_SEPOLIA_DOMAIN, bytes32(uint256(uint160(childVaultEthereumSepolia))));
         messenger.setTrustedSender(KATANA_DOMAIN, bytes32(uint256(uint160(childVaultKatana))));
         vm.stopPrank();
 
@@ -107,10 +107,10 @@ contract CCTPBridgeIntegrationTest is Test {
         vm.stopPrank();
 
         vm.prank(admin);
-        motherVault.deployToChildVault(ARBITRUM_DOMAIN, deployAmount);
+        motherVault.deployToChildVault(ETHEREUM_SEPOLIA_DOMAIN, deployAmount);
 
         // Verify deployment state
-        IMotherVault.ChildVault memory childVault = motherVault.getChildVault(ARBITRUM_DOMAIN);
+        IMotherVault.ChildVault memory childVault = motherVault.getChildVault(ETHEREUM_SEPOLIA_DOMAIN);
         assertEq(childVault.deployedAmount, deployAmount, "Child vault should have deployed amount");
         assertEq(motherVault.totalDeployedAssets(), deployAmount, "Total deployed should match");
 
@@ -120,7 +120,7 @@ contract CCTPBridgeIntegrationTest is Test {
 
         // Bridge calls handleCCTPReceive directly
         vm.prank(address(cctpBridge));
-        motherVault.handleCCTPReceive(returnAmount, ARBITRUM_DOMAIN, messageHash);
+        motherVault.handleCCTPReceive(returnAmount, ETHEREUM_SEPOLIA_DOMAIN, messageHash);
 
         // Step 3: Verify accounting after bridge completion
         assertEq(motherVault.getCurrentBuffer(), idleBefore + returnAmount, "Buffer should increase by return amount");
@@ -130,7 +130,7 @@ contract CCTPBridgeIntegrationTest is Test {
             "Total deployed should decrease by return amount"
         );
 
-        childVault = motherVault.getChildVault(ARBITRUM_DOMAIN);
+        childVault = motherVault.getChildVault(ETHEREUM_SEPOLIA_DOMAIN);
         assertEq(childVault.deployedAmount, deployAmount - returnAmount, "Child vault deployed should decrease");
 
         // Step 4: Verify total assets remain constant (no loss)
@@ -146,30 +146,30 @@ contract CCTPBridgeIntegrationTest is Test {
      * @dev Verifies correct accounting when receiving from multiple sources
      */
     function test_CCTPBridge_MultipleSourceReceives() public {
-        uint256 deployArbitrum = 300e6;
+        uint256 deployEthereumSepolia = 300e6;
         uint256 deployKatana = 400e6;
-        uint256 returnArbitrum = 100e6;
+        uint256 returnEthereumSepolia = 100e6;
         uint256 returnKatana = 150e6;
 
         // Deploy to both child vaults
         vm.startPrank(user);
-        usdc.approve(address(motherVault), deployArbitrum + deployKatana);
-        motherVault.deposit(deployArbitrum + deployKatana, user);
+        usdc.approve(address(motherVault), deployEthereumSepolia + deployKatana);
+        motherVault.deposit(deployEthereumSepolia + deployKatana, user);
         vm.stopPrank();
 
         vm.startPrank(admin);
-        motherVault.deployToChildVault(ARBITRUM_DOMAIN, deployArbitrum);
+        motherVault.deployToChildVault(ETHEREUM_SEPOLIA_DOMAIN, deployEthereumSepolia);
         motherVault.deployToChildVault(KATANA_DOMAIN, deployKatana);
         vm.stopPrank();
 
         uint256 totalAssetsBefore = motherVault.totalAssets();
 
-        // Receive from Arbitrum
+        // Receive from Ethereum Sepolia
         vm.prank(address(cctpBridge));
-        motherVault.handleCCTPReceive(returnArbitrum, ARBITRUM_DOMAIN, bytes32(uint256(1)));
+        motherVault.handleCCTPReceive(returnEthereumSepolia, ETHEREUM_SEPOLIA_DOMAIN, bytes32(uint256(1)));
 
-        IMotherVault.ChildVault memory arbitrumVault = motherVault.getChildVault(ARBITRUM_DOMAIN);
-        assertEq(arbitrumVault.deployedAmount, deployArbitrum - returnArbitrum, "Arbitrum deployed should decrease");
+        IMotherVault.ChildVault memory ethereumSepoliaVault = motherVault.getChildVault(ETHEREUM_SEPOLIA_DOMAIN);
+        assertEq(ethereumSepoliaVault.deployedAmount, deployEthereumSepolia - returnEthereumSepolia, "Ethereum Sepolia deployed should decrease");
 
         // Receive from Katana
         vm.prank(address(cctpBridge));
@@ -179,10 +179,10 @@ contract CCTPBridgeIntegrationTest is Test {
         assertEq(katanaVault.deployedAmount, deployKatana - returnKatana, "Katana deployed should decrease");
 
         // Verify total accounting
-        assertEq(motherVault.getCurrentBuffer(), returnArbitrum + returnKatana, "Buffer should have both returns");
+        assertEq(motherVault.getCurrentBuffer(), returnEthereumSepolia + returnKatana, "Buffer should have both returns");
         assertEq(
             motherVault.totalDeployedAssets(),
-            (deployArbitrum - returnArbitrum) + (deployKatana - returnKatana),
+            (deployEthereumSepolia - returnEthereumSepolia) + (deployKatana - returnKatana),
             "Total deployed should be accurate"
         );
         assertEq(motherVault.totalAssets(), totalAssetsBefore, "Total assets should remain constant");
@@ -204,7 +204,7 @@ contract CCTPBridgeIntegrationTest is Test {
         vm.stopPrank();
 
         vm.prank(admin);
-        motherVault.deployToChildVault(ARBITRUM_DOMAIN, deployAmount);
+        motherVault.deployToChildVault(ETHEREUM_SEPOLIA_DOMAIN, deployAmount);
 
         // Check withdrawal is limited by buffer
         uint256 maxWithdrawBefore = motherVault.maxWithdraw(user);
@@ -212,7 +212,7 @@ contract CCTPBridgeIntegrationTest is Test {
 
         // Receive funds via CCTP to improve liquidity
         vm.prank(address(cctpBridge));
-        motherVault.handleCCTPReceive(returnAmount, ARBITRUM_DOMAIN, bytes32(uint256(3)));
+        motherVault.handleCCTPReceive(returnAmount, ETHEREUM_SEPOLIA_DOMAIN, bytes32(uint256(3)));
 
         // Verify improved withdrawal capacity
         uint256 maxWithdrawAfter = motherVault.maxWithdraw(user);
@@ -250,11 +250,11 @@ contract CCTPBridgeIntegrationTest is Test {
         // Unauthorized caller should fail
         vm.expectRevert("Only messenger/bridge");
         vm.prank(user);
-        motherVault.handleCCTPReceive(amount, ARBITRUM_DOMAIN, bytes32(0));
+        motherVault.handleCCTPReceive(amount, ETHEREUM_SEPOLIA_DOMAIN, bytes32(0));
 
         // Bridge should succeed
         vm.prank(address(cctpBridge));
-        motherVault.handleCCTPReceive(amount, ARBITRUM_DOMAIN, bytes32(0));
+        motherVault.handleCCTPReceive(amount, ETHEREUM_SEPOLIA_DOMAIN, bytes32(0));
 
         // Messenger should succeed
         vm.prank(address(messenger));
@@ -282,7 +282,7 @@ contract CCTPBridgeIntegrationTest is Test {
         vm.stopPrank();
 
         vm.prank(admin);
-        motherVault.deployToChildVault(ARBITRUM_DOMAIN, deployAmount);
+        motherVault.deployToChildVault(ETHEREUM_SEPOLIA_DOMAIN, deployAmount);
 
         uint256 totalReturned = 0;
         uint256 remainingDeployed = deployAmount;
@@ -297,7 +297,7 @@ contract CCTPBridgeIntegrationTest is Test {
             uint256 totalBefore = motherVault.totalAssets();
 
             vm.prank(address(cctpBridge));
-            motherVault.handleCCTPReceive(thisReturn, ARBITRUM_DOMAIN, bytes32(uint256(i)));
+            motherVault.handleCCTPReceive(thisReturn, ETHEREUM_SEPOLIA_DOMAIN, bytes32(uint256(i)));
 
             totalReturned += thisReturn;
             remainingDeployed -= thisReturn;
@@ -309,7 +309,7 @@ contract CCTPBridgeIntegrationTest is Test {
             );
             assertEq(motherVault.totalAssets(), totalBefore, "Total assets should remain constant");
             assertEq(
-                motherVault.getChildVault(ARBITRUM_DOMAIN).deployedAmount,
+                motherVault.getChildVault(ETHEREUM_SEPOLIA_DOMAIN).deployedAmount,
                 remainingDeployed,
                 "Child vault tracking should be accurate"
             );
