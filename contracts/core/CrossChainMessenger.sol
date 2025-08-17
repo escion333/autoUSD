@@ -10,6 +10,7 @@ import { IMailbox } from "../interfaces/Hyperlane/IMailbox.sol";
 import { IInterchainGasPaymaster } from "../interfaces/Hyperlane/IInterchainGasPaymaster.sol";
 import { IMotherVault } from "../interfaces/IMotherVault.sol";
 import { CCTPBridge } from "./CCTPBridge.sol";
+import { HyperlaneConfig } from "../config/HyperlaneConfig.sol";
 
 /**
  * @title CrossChainMessenger
@@ -69,7 +70,10 @@ contract CrossChainMessenger is ICrossChainMessenger, IMessageRecipient, AccessC
     }
 
     // Configuration
-    uint256 public constant DEFAULT_GAS_LIMIT = 500_000;
+    uint256 public defaultGasLimit = 500_000;
+    uint256 public constant MIN_GAS_LIMIT = 100_000;
+    uint256 public constant MAX_GAS_LIMIT = 2_000_000;
+    mapping(uint32 => uint256) public domainGasLimits; // domain => gas limit
     uint256 public constant MAX_MESSAGE_SIZE = 10_000; // bytes
     uint256 public constant MESSAGE_EXPIRY = 7 days;
     uint256 public constant MAX_RETRIES = 3;
@@ -79,6 +83,8 @@ contract CrossChainMessenger is ICrossChainMessenger, IMessageRecipient, AccessC
     // Events
     event TrustedSenderSet(uint32 indexed domain, bytes32 indexed sender);
     event DomainConfigured(uint32 indexed chainId, uint32 domain);
+    event GasLimitSet(uint32 indexed domain, uint256 gasLimit);
+    event DefaultGasLimitSet(uint256 gasLimit);
     event MessageRetryScheduled(bytes32 indexed messageId, uint256 attempt, uint256 nextRetryTime);
     event MessageRetryAttempted(bytes32 indexed messageId, uint256 attempt, bool success);
     event MessageRetryFailed(bytes32 indexed messageId, uint256 totalAttempts);
@@ -119,10 +125,10 @@ contract CrossChainMessenger is ICrossChainMessenger, IMessageRecipient, AccessC
         _grantRole(PAUSER_ROLE, _admin);
         _grantRole(RETRIER_ROLE, _admin);
 
-        // Configure testnet Hyperlane domains
-        _configureDomain(84532, 84532); // Base Sepolia
-        _configureDomain(11155111, 11155111); // Ethereum Sepolia
-        _configureDomain(129399, 747474); // Katana Tatara
+        // Configure testnet Hyperlane domains using HyperlaneConfig
+        _configureDomain(84532, HyperlaneConfig.BASE_SEPOLIA_DOMAIN); // Base Sepolia
+        _configureDomain(11155111, HyperlaneConfig.ETHEREUM_SEPOLIA_DOMAIN); // Ethereum Sepolia
+        _configureDomain(129399, HyperlaneConfig.KATANA_TATARA_DOMAIN); // Katana Tatara
     }
 
     /**
@@ -178,26 +184,42 @@ contract CrossChainMessenger is ICrossChainMessenger, IMessageRecipient, AccessC
         // Convert target address to bytes32
         bytes32 recipientAddress = bytes32(uint256(uint160(message.targetVault)));
 
-        // Quote and check gas payment
-        uint256 requiredGasPayment = gasPaymaster.quoteGasPayment(hyperlaneDomain, DEFAULT_GAS_LIMIT);
-        if (gasPayment != requiredGasPayment) {
-            revert InsufficientGasPayment(requiredGasPayment, gasPayment);
+        // Get gas limit for destination domain
+        uint256 gasLimit = getGasLimit(hyperlaneDomain);
+        
+        // Quote dispatch payment (may be 0 or include hook fees)
+        uint256 dispatchPayment = hyperlaneMailbox.quoteDispatch(hyperlaneDomain, recipientAddress, encodedMessage);
+        
+        // Quote IGP payment
+        uint256 igpPayment = gasPaymaster.quoteGasPayment(hyperlaneDomain, gasLimit);
+        
+        // Total required payment
+        uint256 totalRequiredPayment = dispatchPayment + igpPayment;
+        if (gasPayment < totalRequiredPayment) {
+            revert InsufficientGasPayment(totalRequiredPayment, gasPayment);
         }
 
-        try hyperlaneMailbox.dispatch(hyperlaneDomain, recipientAddress, encodedMessage) returns (bytes32 _messageId) {
+        try hyperlaneMailbox.dispatch{value: dispatchPayment}(hyperlaneDomain, recipientAddress, encodedMessage) returns (bytes32 _messageId) {
             messageId = _messageId;
 
-            // Pay for gas
-            try gasPaymaster.payForGas{ value: gasPayment }(messageId, hyperlaneDomain, DEFAULT_GAS_LIMIT, sender) {
+            // Pay for gas (only IGP portion)
+            try gasPaymaster.payForGas{ value: igpPayment }(messageId, hyperlaneDomain, gasLimit, sender) {
                 emit MessageSent(message.targetChainId, message.messageType, messageId, message.nonce);
+                
+                // Refund excess payment if any
+                uint256 refundAmount = gasPayment - totalRequiredPayment;
+                if (refundAmount > 0) {
+                    (bool success, ) = payable(sender).call{value: refundAmount}("");
+                    // Ignore refund failure to avoid blocking the message
+                }
             } catch (bytes memory reason) {
                 // If gas payment fails, schedule for retry
-                _scheduleMessageRetry(messageId, message, encodedMessage, gasPayment, sender, reason);
+                _scheduleMessageRetry(messageId, message, encodedMessage, igpPayment, sender, reason);
             }
         } catch (bytes memory reason) {
             // Generate a pseudo message ID for failed dispatch
             messageId = keccak256(abi.encodePacked(block.timestamp, sender, encodedMessage));
-            _scheduleMessageRetry(messageId, message, encodedMessage, gasPayment, sender, reason);
+            _scheduleMessageRetry(messageId, message, encodedMessage, totalRequiredPayment, sender, reason);
         }
     }
 
@@ -271,7 +293,7 @@ contract CrossChainMessenger is ICrossChainMessenger, IMessageRecipient, AccessC
             failed.messageId = newMessageId;
 
             try gasPaymaster.payForGas{ value: failed.gasPayment }(
-                newMessageId, hyperlaneDomain, DEFAULT_GAS_LIMIT, failed.sender
+                newMessageId, hyperlaneDomain, defaultGasLimit, failed.sender
             ) {
                 success = true;
                 failed.resolved = true;
@@ -518,7 +540,8 @@ contract CrossChainMessenger is ICrossChainMessenger, IMessageRecipient, AccessC
         uint32 domain = chainToHyperlaneDomain[targetChainId];
         if (domain == 0) return 0;
 
-        return gasPaymaster.quoteGasPayment(domain, DEFAULT_GAS_LIMIT);
+        uint256 gasLimit = getGasLimit(domain);
+        return gasPaymaster.quoteGasPayment(domain, gasLimit);
     }
 
     /**
@@ -554,6 +577,37 @@ contract CrossChainMessenger is ICrossChainMessenger, IMessageRecipient, AccessC
      */
     function unpause() external onlyRole(PAUSER_ROLE) {
         _unpause();
+    }
+    
+    /**
+     * @notice Set gas limit for a specific domain
+     * @param domain The Hyperlane domain ID
+     * @param gasLimit The gas limit to use for messages to this domain
+     */
+    function setDomainGasLimit(uint32 domain, uint256 gasLimit) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(gasLimit >= MIN_GAS_LIMIT && gasLimit <= MAX_GAS_LIMIT, "Invalid gas limit");
+        domainGasLimits[domain] = gasLimit;
+        emit GasLimitSet(domain, gasLimit);
+    }
+    
+    /**
+     * @notice Set the default gas limit
+     * @param gasLimit The new default gas limit
+     */
+    function setDefaultGasLimit(uint256 gasLimit) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(gasLimit >= MIN_GAS_LIMIT && gasLimit <= MAX_GAS_LIMIT, "Invalid gas limit");
+        defaultGasLimit = gasLimit;
+        emit DefaultGasLimitSet(gasLimit);
+    }
+    
+    /**
+     * @notice Get gas limit for a domain
+     * @param domain The Hyperlane domain ID
+     * @return The gas limit to use
+     */
+    function getGasLimit(uint32 domain) public view returns (uint256) {
+        uint256 limit = domainGasLimits[domain];
+        return limit > 0 ? limit : defaultGasLimit;
     }
 
     function _configureDomain(uint256 chainId, uint32 domain) private {

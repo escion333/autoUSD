@@ -176,7 +176,7 @@ contract EthereumBridgeHub is Ownable(msg.sender), ReentrancyGuard, Pausable, IM
         
         // Auto-relay to Katana if child vault is set and we have balance
         if (katanaChildVault != address(0) && usdc.balanceOf(address(this)) >= amount) {
-            relayToKatana(amount, katanaChildVault);
+            _relayToKatana(amount, katanaChildVault);
         }
     }
     
@@ -191,7 +191,57 @@ contract EthereumBridgeHub is Ownable(msg.sender), ReentrancyGuard, Pausable, IM
         
         // Auto-relay to Base if mother vault is set and we have balance
         if (motherVault != address(0) && usdc.balanceOf(address(this)) >= amount) {
-            relayToBase(amount, motherVault);
+            _relayToBase(amount, motherVault);
+        }
+    }
+    
+    // Internal helpers for auto-relay
+    
+    function _relayToKatana(uint256 amount, address recipient) internal {
+        if (amount == 0 || recipient == address(0)) return;
+        
+        uint256 balance = usdc.balanceOf(address(this));
+        if (balance < amount) return;
+        
+        // Approve Unified Bridge
+        usdc.forceApprove(address(unifiedBridge), amount);
+        
+        // Bridge to Katana via Unified Bridge
+        uint256 bridgeFee = address(this).balance > 0.001 ether ? 0.001 ether : address(this).balance;
+        try unifiedBridge.bridgeAsset{value: bridgeFee}(
+            KATANA_NETWORK_ID,
+            recipient,
+            amount,
+            address(usdc),
+            true,
+            ""
+        ) {
+            totalToKatana += amount;
+            emit RelayedToKatana(amount, recipient);
+        } catch {
+            // Silent fail for auto-relay
+        }
+    }
+    
+    function _relayToBase(uint256 amount, address recipient) internal {
+        if (amount == 0 || recipient == address(0)) return;
+        
+        uint256 balance = usdc.balanceOf(address(this));
+        if (balance < amount) return;
+        
+        // Approve CCTP Bridge
+        usdc.forceApprove(address(cctpBridge), amount);
+        
+        // Bridge back to Base via CCTP
+        try cctpBridge.bridgeUSDC(
+            amount,
+            BASE_CCTP_DOMAIN,
+            recipient
+        ) {
+            totalToBase += amount;
+            emit RelayedToBase(amount, recipient);
+        } catch {
+            // Silent fail for auto-relay
         }
     }
     

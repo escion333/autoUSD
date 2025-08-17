@@ -1,42 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createHmac, timingSafeEqual } from 'crypto';
 import { 
   FernWebhookEvent, 
   CustomerVerifiedEvent, 
   TransactionCompletedEvent 
 } from '@/lib/fern/types';
-
-// Webhook signature verification
-function verifyWebhookSignature(req: NextRequest, body: string): boolean {
-  if (process.env.NODE_ENV === 'development') {
-    return true; // Skip verification in development
-  }
-  
-  const signature = req.headers.get('x-fern-signature');
-  const secret = process.env.FERN_WEBHOOK_SECRET;
-  
-  if (!signature || !secret) {
-    console.error('Missing webhook signature or secret');
-    return false;
-  }
-  
-  try {
-    // Fern uses HMAC-SHA256 for webhook signatures
-    const expectedSignature = createHmac('sha256', secret)
-      .update(body)
-      .digest('hex');
-    
-    // Compare signatures using timing-safe comparison
-    const providedSignature = signature.replace('sha256=', '');
-    return timingSafeEqual(
-      Buffer.from(expectedSignature, 'hex'),
-      Buffer.from(providedSignature, 'hex')
-    );
-  } catch (error) {
-    console.error('Signature verification error:', error);
-    return false;
-  }
-}
+import { webhookProcessor } from '@/lib/fern/webhookProcessor';
+import { fernConfig } from '@/lib/fern/config';
+import { validateWebhookSignatureServer } from '@/lib/fern/config-server';
+import { validateWebhookEvent, ValidationError } from '@/lib/fern/validation';
 
 // Store webhook events for tracking and retry
 async function storeWebhookEvent(event: FernWebhookEvent): Promise<void> {
@@ -90,8 +61,14 @@ export async function POST(req: NextRequest) {
     // Get raw body for signature verification
     body = await req.text();
     
-    // Verify webhook signature
-    if (!verifyWebhookSignature(req, body)) {
+    // Verify webhook signature using server-side validation
+    const signature = req.headers.get(fernConfig.getWebhookSignatureHeader()) || '';
+    const secret = process.env.FERN_WEBHOOK_SECRET || '';
+    
+    // Skip validation in development if no secret is configured
+    const shouldValidate = process.env.NODE_ENV === 'production' || secret;
+    
+    if (shouldValidate && !validateWebhookSignatureServer(signature, body, secret)) {
       console.error('❌ Invalid webhook signature');
       return NextResponse.json(
         { error: 'Invalid signature' },
@@ -99,12 +76,21 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Parse event
-    event = JSON.parse(body);
-    
-    if (!event) {
+    // Parse and validate event
+    try {
+      const parsedData = JSON.parse(body);
+      event = validateWebhookEvent(parsedData);
+    } catch (error) {
+      if (error instanceof ValidationError) {
+        console.error('❌ Invalid webhook event:', error.message);
+        return NextResponse.json(
+          { error: `Validation failed: ${error.message}`, field: error.field },
+          { status: 400 }
+        );
+      }
+      console.error('❌ Failed to parse webhook body:', error);
       return NextResponse.json(
-        { error: 'Invalid event data' },
+        { error: 'Invalid JSON in request body' },
         { status: 400 }
       );
     }
@@ -115,60 +101,33 @@ export async function POST(req: NextRequest) {
       timestamp: event.timestamp,
     });
 
-    // Check for duplicate events (idempotency)
-    if (await isEventProcessed(event.eventId)) {
-      console.log('⚠️ Event already processed, skipping:', event.eventId);
-      return NextResponse.json({ received: true, status: 'already_processed' });
+    // Use the webhook processor to handle the event
+    const result = await webhookProcessor.processWebhook(event);
+    
+    if (result.success) {
+      // Return success response
+      return NextResponse.json({ 
+        received: true, 
+        eventId: event.eventId,
+        result: result.result,
+        processedAt: result.processedAt,
+      });
+    } else {
+      // Return error but with 200 status to prevent infinite retries for non-retryable errors
+      const isRetryable = result.error?.includes('network') || 
+                         result.error?.includes('timeout') ||
+                         result.error?.includes('insufficient');
+      
+      return NextResponse.json(
+        { 
+          received: true,
+          eventId: event.eventId,
+          error: result.error,
+          retryable: isRetryable,
+        },
+        { status: isRetryable ? 500 : 200 } // Only return 500 for retryable errors
+      );
     }
-
-    // Store event for audit trail
-    await storeWebhookEvent(event);
-
-    // Handle different event types
-    let handlerResult: any;
-    switch (event.eventType) {
-      case 'customer.created':
-        handlerResult = await handleCustomerCreated(event);
-        break;
-      
-      case 'customer.verified':
-        handlerResult = await handleCustomerVerified(event);
-        break;
-      
-      case 'customer.rejected':
-        handlerResult = await handleCustomerRejected(event);
-        break;
-      
-      case 'transaction.pending':
-        handlerResult = await handleTransactionPending(event);
-        break;
-      
-      case 'transaction.processing':
-        handlerResult = await handleTransactionProcessing(event);
-        break;
-      
-      case 'transaction.completed':
-        handlerResult = await handleTransactionCompleted(event);
-        break;
-      
-      case 'transaction.failed':
-        handlerResult = await handleTransactionFailed(event);
-        break;
-      
-      default:
-        console.log('⚠️ Unhandled event type:', event.eventType);
-        handlerResult = { status: 'unhandled_event_type' };
-    }
-
-    // Mark event as successfully processed
-    await markEventProcessed(event.eventId);
-
-    // Return success response
-    return NextResponse.json({ 
-      received: true, 
-      eventId: event.eventId,
-      handlerResult 
-    });
     
   } catch (error: any) {
     console.error('💥 Webhook processing error:', {

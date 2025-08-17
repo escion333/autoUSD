@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { webhookProcessor } from '@/lib/fern/webhookProcessor';
+import { TransactionCompletedEvent } from '@/lib/fern/types';
 
 // Manual retry endpoint for failed auto-deposits
 export async function POST(req: NextRequest) {
   try {
-    const { fernTransactionId, userEmail } = await req.json();
+    const { fernTransactionId, userEmail, amount, walletAddress } = await req.json();
     
     if (!fernTransactionId || !userEmail) {
       return NextResponse.json(
@@ -15,42 +17,49 @@ export async function POST(req: NextRequest) {
     console.log('🔄 Manual retry requested for auto-deposit:', {
       fernTransactionId,
       userEmail,
+      amount,
     });
     
-    // TODO: In production, implement retry logic:
-    // 1. Look up failed auto-deposit record in database
-    // 2. Check if retry is allowed (error type, retry count)
-    // 3. Attempt deposit again with exponential backoff
-    // 4. Update retry count and status
+    // Use the webhook processor to retry the deposit
+    const retryEvent: TransactionCompletedEvent = {
+      transactionId: fernTransactionId,
+      amount: amount || 0,
+      currency: 'USDC',
+      destinationAddress: walletAddress || '',
+      transactionHash: '', // Will be populated on success
+    };
     
-    // For development, simulate retry
-    if (process.env.NODE_ENV === 'development') {
-      // Simulate some processing time
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      // Simulate 70% success rate for retries
-      const success = Math.random() > 0.3;
-      
-      if (success) {
-        return NextResponse.json({
-          success: true,
-          message: 'Auto-deposit retry succeeded',
-          transactionHash: `0x${Math.random().toString(16).substring(2, 66)}`,
-        });
-      } else {
-        return NextResponse.json({
-          success: false,
-          message: 'Auto-deposit retry failed - please try manual deposit',
-          canRetryAgain: Math.random() > 0.5,
-        });
-      }
+    const result = await webhookProcessor.processWebhook({
+      eventId: `retry-${fernTransactionId}-${Date.now()}`,
+      eventType: 'transaction.completed',
+      timestamp: new Date().toISOString(),
+      data: retryEvent,
+    });
+    
+    if (result.success && result.result?.status === 'success') {
+      return NextResponse.json({
+        success: true,
+        message: 'Auto-deposit retry succeeded',
+        transactionHash: result.result.transactionHash,
+        amount: result.result.amount,
+        shares: result.result.shares,
+      });
+    } else if (result.result?.status === 'skipped') {
+      return NextResponse.json({
+        success: false,
+        message: 'Deposit skipped due to cap limit',
+        reason: result.result.reason,
+        canRetryAgain: false,
+      });
+    } else {
+      return NextResponse.json({
+        success: false,
+        message: result.error || 'Auto-deposit retry failed - please try manual deposit',
+        canRetryAgain: true, // Allow manual retry unless explicitly blocked
+        error: result.error,
+        details: result.result,
+      });
     }
-    
-    // Production implementation placeholder
-    return NextResponse.json(
-      { error: 'Retry functionality not implemented in production' },
-      { status: 501 }
-    );
     
   } catch (error: any) {
     console.error('❌ Auto-deposit retry error:', error.message);

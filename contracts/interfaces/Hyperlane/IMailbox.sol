@@ -57,10 +57,11 @@ interface IMailbox {
     function recipientIsm(address recipient) external view returns (address);
 
     /**
-     * @notice Quote the gas payment required for a dispatch
+     * @notice Quote the dispatch fee required (Hyperlane V3 with hooks)
      * @param destinationDomain The destination domain
+     * @param recipientAddress The recipient address
      * @param messageBody The message body
-     * @return The required gas payment in wei
+     * @return The required dispatch payment in wei (may be 0 or include hook fees)
      */
     function quoteDispatch(
         uint32 destinationDomain,

@@ -2,12 +2,12 @@
 pragma solidity ^0.8.23;
 
 import "forge-std/Script.sol";
-import "../../contracts/MotherVault.sol";
-import "../../contracts/core/CCTPBridge.sol";
-import "../../contracts/core/CrossChainMessenger.sol";
-import "../../contracts/core/Rebalancer.sol";
-import "../../contracts/core/YieldDistributor.sol";
-import "../../contracts/core/HealthMonitor.sol";
+import "../../../../contracts/MotherVault.sol";
+import "../../../../contracts/core/CCTPBridge.sol";
+import "../../../../contracts/core/CrossChainMessenger.sol";
+import "../../../../contracts/core/Rebalancer.sol";
+import "../../../../contracts/core/YieldDistributor.sol";
+import "../../../../contracts/core/HealthMonitor.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract DeployBaseSepolia is Script {
