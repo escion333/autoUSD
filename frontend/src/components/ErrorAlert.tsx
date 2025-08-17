@@ -35,17 +35,17 @@ export function ErrorAlert({
   if (!isVisible) return null;
 
   const severityClasses: Record<ErrorSeverity, string> = {
-    info: 'bg-blue-50 border-blue-200 text-blue-800',
-    warning: 'bg-yellow-50 border-yellow-200 text-yellow-800',
-    error: 'bg-red-50 border-red-200 text-red-800',
-    critical: 'bg-red-100 border-red-400 text-red-900',
+    info: 'bg-primary-subtle border-primary/20 text-primary',
+    warning: 'bg-warning-subtle border-warning/20 text-warning',
+    error: 'bg-error-subtle border-error/20 text-error',
+    critical: 'bg-error-subtle border-error text-error',
   };
 
   const buttonClasses: Record<ErrorSeverity, string> = {
-    info: 'text-blue-600 hover:text-blue-700 hover:bg-blue-100',
-    warning: 'text-yellow-600 hover:text-yellow-700 hover:bg-yellow-100',
-    error: 'text-red-600 hover:text-red-700 hover:bg-red-100',
-    critical: 'text-red-700 hover:text-red-800 hover:bg-red-200',
+    info: 'text-primary hover:text-primary-hover hover:bg-primary/10',
+    warning: 'text-warning hover:text-warning/90 hover:bg-warning/10',
+    error: 'text-error hover:text-error/90 hover:bg-error/10',
+    critical: 'text-error hover:text-error/90 hover:bg-error/10',
   };
 
   return (
@@ -70,7 +70,7 @@ export function ErrorAlert({
                     setIsVisible(false);
                     onDismiss();
                   }}
-                  className="text-sm text-gray-600 hover:text-gray-700"
+                  className="text-sm text-text-muted hover:text-text-body transition-colors"
                 >
                   Dismiss
                 </button>
@@ -92,7 +92,7 @@ export function InlineError({ error, className = '' }: InlineErrorProps) {
   const { message, icon } = formatErrorDisplay(error);
   
   return (
-    <div className={`flex items-center gap-2 text-sm text-red-600 ${className}`}>
+    <div className={`flex items-center gap-2 text-sm text-error ${className}`}>
       <span>{icon}</span>
       <span>{message}</span>
     </div>

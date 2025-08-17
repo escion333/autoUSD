@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-// import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
-import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {ITokenMessenger} from "../interfaces/CCTP/ITokenMessenger.sol";
-import {IMessageTransmitter} from "../interfaces/CCTP/IMessageTransmitter.sol";
-import {IMessageReceiver} from "../interfaces/CCTP/IMessageReceiver.sol";
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import { AccessControl } from "@openzeppelin/contracts/access/AccessControl.sol";
+import { Pausable } from "@openzeppelin/contracts/utils/Pausable.sol";
+import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import { ITokenMessenger } from "../interfaces/CCTP/ITokenMessenger.sol";
+import { IMessageTransmitter } from "../interfaces/CCTP/IMessageTransmitter.sol";
+import { IMessageReceiver } from "../interfaces/CCTP/IMessageReceiver.sol";
+import { IMotherVault } from "../interfaces/IMotherVault.sol";
 
 /**
  * @title CCTPBridge
@@ -16,7 +17,7 @@ import {IMessageReceiver} from "../interfaces/CCTP/IMessageReceiver.sol";
  * @dev Manages burn/mint operations and attestation verification for cross-chain USDC transfers
  */
 contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuard {
-    // using SafeERC20 for IERC20;
+    using SafeERC20 for IERC20;
 
     // Roles
 
@@ -43,6 +44,7 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
         uint256 timestamp;
         uint8 retryCount;
     }
+
     mapping(uint64 => PendingTransfer) public pendingTransfers;
 
     mapping(bytes32 => bool) public processedMessages;
@@ -53,7 +55,7 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
     uint256 public constant BRIDGE_TIMEOUT = 2 hours;
     uint256 public minBridgeAmount = 1e6; // 1 USDC minimum
     uint256 public maxBridgeAmount = 1_000_000e6; // 1M USDC maximum
-    
+
     // Failed bridge tracking
     mapping(uint64 => bool) public failedBridges;
     mapping(address => uint64[]) public userFailedBridges;
@@ -61,51 +63,27 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
     // Events
     event BridgeInitiated(
         uint64 indexed nonce,
-        uint256 amount,
-        uint32 destinationDomain,
-        address indexed recipient,
-        address indexed sender
+        uint256 indexed amount,
+        uint32 indexed destinationDomain,
+        address recipient,
+        address sender
     );
 
-    event BridgeRetried(
-        uint64 indexed oldNonce,
-        uint64 indexed newNonce,
-        uint8 retryCount
-    );
+    event BridgeRetried(uint64 indexed oldNonce, uint64 indexed newNonce, uint8 indexed retryCount);
 
     event BridgeCompleted(
-        bytes32 indexed messageHash,
-        uint256 amount,
-        uint32 sourceDomain,
-        address indexed recipient
+        bytes32 indexed messageHash, uint256 indexed amount, uint32 indexed sourceDomain, address recipient
     );
 
-    event BridgeFailed(
-        uint64 indexed nonce
-    );
-    
-    event BridgeTimedOut(
-        uint64 indexed nonce,
-        uint256 timeout
-    );
-    
-    event BridgeRetryScheduled(
-        uint64 indexed nonce,
-        uint256 attempt,
-        uint256 nextRetryTime
-    );
+    event BridgeFailed(uint64 indexed nonce);
 
+    event BridgeTimedOut(uint64 indexed nonce, uint256 indexed timeout);
 
-    event DomainConfigured(
-        uint256 chainId,
-        uint32 domain,
-        bool supported
-    );
+    event BridgeRetryScheduled(uint64 indexed nonce, uint256 indexed attempt, uint256 indexed nextRetryTime);
 
-    event BridgeLimitsUpdated(
-        uint256 minAmount,
-        uint256 maxAmount
-    );
+    event DomainConfigured(uint256 indexed chainId, uint32 indexed domain, bool indexed supported);
+
+    event BridgeLimitsUpdated(uint256 indexed minAmount, uint256 indexed maxAmount);
 
     // Errors
     error InvalidDomain(uint32 domain);
@@ -133,12 +111,7 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
         uint256 amount;
     }
 
-    constructor(
-        address _tokenMessenger,
-        address _messageTransmitter,
-        address _usdc,
-        address _admin
-    ) {
+    constructor(address _tokenMessenger, address _messageTransmitter, address _usdc, address _admin) {
         require(_tokenMessenger != address(0), "Invalid TokenMessenger");
         require(_messageTransmitter != address(0), "Invalid MessageTransmitter");
         require(_usdc != address(0), "Invalid USDC");
@@ -152,11 +125,22 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
         _grantRole(PAUSER_ROLE, _admin);
         _grantRole(RETRIER_ROLE, _admin);
 
-        // Initialize common domain mappings
-        _configureDomain(8453, 6); // Base => CCTP domain 6
+        // Initialize CCTP v2 domain mappings
+        // Mainnet chains
         _configureDomain(1, 0); // Ethereum => CCTP domain 0
-        _configureDomain(10, 2); // Optimism => CCTP domain 2
-        _configureDomain(42161, 3); // Arbitrum => CCTP domain 3
+        _configureDomain(43114, 1); // Avalanche => CCTP domain 1
+        _configureDomain(10, 2); // OP Mainnet => CCTP domain 2
+        _configureDomain(42_161, 3); // Arbitrum => CCTP domain 3
+        _configureDomain(8453, 6); // Base => CCTP domain 6
+        _configureDomain(137, 7); // Polygon PoS => CCTP domain 7
+        
+        // Testnet chains
+        _configureDomain(11155111, 0); // Ethereum Sepolia => CCTP domain 0
+        _configureDomain(43113, 1); // Avalanche Fuji => CCTP domain 1
+        _configureDomain(11155420, 2); // OP Sepolia => CCTP domain 2
+        _configureDomain(421614, 3); // Arbitrum Sepolia => CCTP domain 3
+        _configureDomain(84532, 10002); // Base Sepolia => CCTP domain 10002
+        _configureDomain(80002, 7); // Polygon Amoy => CCTP domain 7
     }
 
     /**
@@ -170,7 +154,13 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
         uint256 amount,
         uint256 destinationChainId,
         address recipient
-    ) external nonReentrant whenNotPaused virtual returns (uint64 nonce) {
+    )
+        external
+        virtual
+        nonReentrant
+        whenNotPaused
+        returns (uint64 nonce)
+    {
         // Validate inputs
         if (amount < minBridgeAmount) revert AmountTooLow(amount);
         if (amount > maxBridgeAmount) revert AmountTooHigh(amount);
@@ -180,21 +170,20 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
         if (!supportedDomains[destinationDomain]) revert InvalidDomain(destinationDomain);
 
         // Pull USDC from the sender
-        usdc.transferFrom(msg.sender, address(this), amount);
+        usdc.safeTransferFrom(msg.sender, address(this), amount);
 
         // Approve TokenMessenger to burn USDC
+        // Reset allowance to 0 first for security against approval exploits
+        usdc.approve(address(tokenMessenger), 0);
         usdc.approve(address(tokenMessenger), amount);
 
         // Convert recipient address to bytes32 (left-padded)
         bytes32 mintRecipient = bytes32(uint256(uint160(recipient)));
 
         // Initiate burn and bridge with error handling
-        try tokenMessenger.depositForBurn(
-            amount,
-            destinationDomain,
-            mintRecipient,
-            address(usdc)
-        ) returns (uint64 _nonce) {
+        try tokenMessenger.depositForBurn(amount, destinationDomain, mintRecipient, address(usdc)) returns (
+            uint64 _nonce
+        ) {
             nonce = _nonce;
         } catch (bytes memory reason) {
             // If burn fails, we need to handle it gracefully
@@ -217,14 +206,12 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
      * @notice Retry a pending bridge transfer
      * @param nonce Nonce of the transfer to retry
      */
-    function retryBridge(
-        uint64 nonce
-    ) external nonReentrant whenNotPaused onlyRole(RETRIER_ROLE) {
+    function retryBridge(uint64 nonce) external nonReentrant whenNotPaused onlyRole(RETRIER_ROLE) {
         PendingTransfer storage transferToRetry = pendingTransfers[nonce];
 
         if (transferToRetry.timestamp == 0) revert TransferNotPending(nonce);
         if (failedBridges[nonce]) revert BridgeAlreadyFailed(nonce);
-        
+
         // Check for timeout
         if (block.timestamp > transferToRetry.timestamp + BRIDGE_TIMEOUT) {
             failedBridges[nonce] = true;
@@ -232,13 +219,13 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
             emit BridgeTimedOut(nonce, transferToRetry.timestamp + BRIDGE_TIMEOUT);
             revert BridgeTimeout(nonce);
         }
-        
+
         // Check retry delay using exponential backoff
-        uint256 retryDelay = retryDelays[transferToRetry.retryCount < retryDelays.length ? transferToRetry.retryCount : retryDelays.length - 1];
+        uint256 retryDelay = retryDelays[transferToRetry.retryCount < retryDelays.length
+            ? transferToRetry.retryCount
+            : retryDelays.length - 1];
         if (block.timestamp < transferToRetry.timestamp + retryDelay) {
-            revert RetryDelayNotElapsed(
-                transferToRetry.timestamp + retryDelay - block.timestamp
-            );
+            revert RetryDelayNotElapsed(transferToRetry.timestamp + retryDelay - block.timestamp);
         }
         if (transferToRetry.retryCount >= MAX_RETRY_COUNT) {
             emit BridgeFailed(nonce);
@@ -249,15 +236,14 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
         transferToRetry.retryCount++;
 
         // Re-approve and re-bridge with error handling
+        // Reset allowance to 0 first for security against approval exploits
+        usdc.approve(address(tokenMessenger), 0);
         usdc.approve(address(tokenMessenger), transferToRetry.amount);
         bytes32 mintRecipient = bytes32(uint256(uint160(transferToRetry.recipient)));
-        
+
         uint64 newNonce;
         try tokenMessenger.depositForBurn(
-            transferToRetry.amount,
-            transferToRetry.destinationDomain,
-            mintRecipient,
-            address(usdc)
+            transferToRetry.amount, transferToRetry.destinationDomain, mintRecipient, address(usdc)
         ) returns (uint64 _newNonce) {
             newNonce = _newNonce;
         } catch (bytes memory reason) {
@@ -271,15 +257,17 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
         // Update pending transfer with new nonce and timestamp
         pendingTransfers[newNonce] = transferToRetry;
         pendingTransfers[newNonce].timestamp = block.timestamp;
-        
+
         // Remove old pending transfer
         delete pendingTransfers[nonce];
 
         emit BridgeRetried(nonce, newNonce, transferToRetry.retryCount);
-        
+
         // Schedule next retry if needed
         if (transferToRetry.retryCount < MAX_RETRY_COUNT) {
-            uint256 nextRetryDelay = retryDelays[transferToRetry.retryCount < retryDelays.length ? transferToRetry.retryCount : retryDelays.length - 1];
+            uint256 nextRetryDelay = retryDelays[transferToRetry.retryCount < retryDelays.length
+                ? transferToRetry.retryCount
+                : retryDelays.length - 1];
             emit BridgeRetryScheduled(newNonce, transferToRetry.retryCount + 1, block.timestamp + nextRetryDelay);
         }
     }
@@ -299,7 +287,11 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
         uint32 sourceDomain,
         bytes32, /* remoteTokenMessenger */
         bytes calldata messageBody
-    ) external nonReentrant whenNotPaused {
+    )
+        external
+        nonReentrant
+        whenNotPaused
+    {
         require(msg.sender == address(tokenMessenger), "Only TokenMessenger");
         require(supportedDomains[sourceDomain], "Unsupported source domain");
 
@@ -316,23 +308,30 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
         }
 
         // Transfer USDC to the intended recipient
-        usdc.transfer(recipient, cctpMessage.amount);
+        usdc.safeTransfer(recipient, cctpMessage.amount);
+
+        // If the recipient is a contract that implements MotherVault accounting,
+        // notify it so it can update internal idle/deployed balances
+        if (recipient.code.length > 0) {
+            // best-effort callback; ignore failures to avoid blocking CCTP flow
+            try IMotherVault(recipient).handleCCTPReceive(cctpMessage.amount, sourceDomain, messageHash) {
+                // no-op
+            } catch {
+                // swallow
+            }
+        }
 
         emit BridgeCompleted(messageHash, cctpMessage.amount, sourceDomain, recipient);
     }
-    
+
     /**
      * @notice Parses a raw CCTP message into a structured format.
      * @param message The raw bytes of the CCTP message.
      * @return A CCTPMessage struct.
      */
-    function _parseCCTPMessage(
-        bytes calldata message
-    ) private pure returns (CCTPMessage memory) {
+    function _parseCCTPMessage(bytes calldata message) private pure returns (CCTPMessage memory) {
         return abi.decode(message, (CCTPMessage));
     }
-
-
 
     /**
      * @notice Get failed bridges for a user
@@ -351,7 +350,7 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
      */
     function canRetryBridge(uint64 nonce) external view returns (bool canRetry, uint256 timeUntilRetry) {
         PendingTransfer memory transfer = pendingTransfers[nonce];
-        
+
         if (transfer.timestamp == 0 || failedBridges[nonce] || transfer.retryCount >= MAX_RETRY_COUNT) {
             return (false, 0);
         }
@@ -361,9 +360,10 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
             return (false, 0);
         }
 
-        uint256 retryDelay = retryDelays[transfer.retryCount < retryDelays.length ? transfer.retryCount : retryDelays.length - 1];
+        uint256 retryDelay =
+            retryDelays[transfer.retryCount < retryDelays.length ? transfer.retryCount : retryDelays.length - 1];
         uint256 nextRetryTime = transfer.timestamp + retryDelay;
-        
+
         if (block.timestamp >= nextRetryTime) {
             return (true, 0);
         } else {
@@ -377,7 +377,11 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
      * @return maxRetries Maximum number of retries
      * @return timeout Bridge timeout duration
      */
-    function getBridgeRetryConfiguration() external view returns (uint256[] memory delays, uint256 maxRetries, uint256 timeout) {
+    function getBridgeRetryConfiguration()
+        external
+        view
+        returns (uint256[] memory delays, uint256 maxRetries, uint256 timeout)
+    {
         return (retryDelays, MAX_RETRY_COUNT, BRIDGE_TIMEOUT);
     }
 
@@ -386,38 +390,43 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
      * @param nonce Bridge nonce to retry
      * @return newNonce New bridge nonce
      */
-    function manualRetryBridge(uint64 nonce) external nonReentrant whenNotPaused onlyRole(RETRIER_ROLE) returns (uint64 newNonce) {
+    function manualRetryBridge(uint64 nonce)
+        external
+        nonReentrant
+        whenNotPaused
+        onlyRole(RETRIER_ROLE)
+        returns (uint64 newNonce)
+    {
         PendingTransfer storage transferToRetry = pendingTransfers[nonce];
-        
+
         if (transferToRetry.timestamp == 0) revert TransferNotPending(nonce);
-        
+
         // Force retry regardless of delay or retry count for manual intervention
         transferToRetry.retryCount++;
-        
+
         // Re-approve and re-bridge
+        // Reset allowance to 0 first for security against approval exploits
+        usdc.approve(address(tokenMessenger), 0);
         usdc.approve(address(tokenMessenger), transferToRetry.amount);
         bytes32 mintRecipient = bytes32(uint256(uint160(transferToRetry.recipient)));
-        
+
         try tokenMessenger.depositForBurn(
-            transferToRetry.amount,
-            transferToRetry.destinationDomain,
-            mintRecipient,
-            address(usdc)
+            transferToRetry.amount, transferToRetry.destinationDomain, mintRecipient, address(usdc)
         ) returns (uint64 _newNonce) {
             newNonce = _newNonce;
-            
+
             // Update pending transfer with new nonce and timestamp
             pendingTransfers[newNonce] = transferToRetry;
             pendingTransfers[newNonce].timestamp = block.timestamp;
-            
+
             // Remove old pending transfer
             delete pendingTransfers[nonce];
-            
+
             // Remove from failed bridges if it was there
             if (failedBridges[nonce]) {
                 failedBridges[nonce] = false;
             }
-            
+
             emit BridgeRetried(nonce, newNonce, transferToRetry.retryCount);
         } catch (bytes memory reason) {
             // Mark as permanently failed
@@ -434,25 +443,24 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
      */
     function emergencyBridgeRecovery(uint64 nonce) external nonReentrant whenNotPaused onlyRole(DEFAULT_ADMIN_ROLE) {
         PendingTransfer memory transfer = pendingTransfers[nonce];
-        
+
         if (transfer.timestamp == 0) revert TransferNotPending(nonce);
-        
+
         // Only allow recovery after timeout or max retries
         require(
-            block.timestamp > transfer.timestamp + BRIDGE_TIMEOUT || 
-            transfer.retryCount >= MAX_RETRY_COUNT ||
-            failedBridges[nonce],
+            block.timestamp > transfer.timestamp + BRIDGE_TIMEOUT || transfer.retryCount >= MAX_RETRY_COUNT
+                || failedBridges[nonce],
             "Bridge not eligible for recovery"
         );
-        
+
         // Transfer USDC back to the original sender
         address originalSender = transfer.recipient; // Note: In a real implementation, you'd want to track the original sender
-        usdc.transfer(originalSender, transfer.amount);
-        
+        usdc.safeTransfer(originalSender, transfer.amount);
+
         // Clean up
         delete pendingTransfers[nonce];
         failedBridges[nonce] = true;
-        
+
         emit BridgeFailed(nonce);
     }
 
@@ -461,10 +469,7 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
      * @param chainId Chain ID
      * @param domain CCTP domain ID
      */
-    function configureDomain(
-        uint256 chainId,
-        uint32 domain
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function configureDomain(uint256 chainId, uint32 domain) external onlyRole(DEFAULT_ADMIN_ROLE) {
         _configureDomain(chainId, domain);
     }
 
@@ -473,10 +478,7 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
      * @param domain CCTP domain ID
      * @param supported Whether the domain is supported
      */
-    function setSupportedDomain(
-        uint32 domain,
-        bool supported
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function setSupportedDomain(uint32 domain, bool supported) external onlyRole(DEFAULT_ADMIN_ROLE) {
         supportedDomains[domain] = supported;
         emit DomainConfigured(domainToChain[domain], domain, supported);
     }
@@ -486,10 +488,7 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
      * @param _minAmount Minimum bridge amount
      * @param _maxAmount Maximum bridge amount
      */
-    function setBridgeLimits(
-        uint256 _minAmount,
-        uint256 _maxAmount
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function setBridgeLimits(uint256 _minAmount, uint256 _maxAmount) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(_minAmount <= _maxAmount, "Invalid limits");
         minBridgeAmount = _minAmount;
         maxBridgeAmount = _maxAmount;
@@ -515,11 +514,8 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
      * @param to Recipient address
      * @param amount Amount to withdraw
      */
-    function emergencyWithdraw(
-        address to,
-        uint256 amount
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        usdc.transfer(to, amount);
+    function emergencyWithdraw(address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        usdc.safeTransfer(to, amount);
     }
 
     /**

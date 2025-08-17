@@ -1,22 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {IInterchainGasPaymaster} from "../../contracts/interfaces/Hyperlane/IInterchainGasPaymaster.sol";
+import { IInterchainGasPaymaster } from "../../contracts/interfaces/Hyperlane/IInterchainGasPaymaster.sol";
 
 contract MockInterchainGasPaymaster is IInterchainGasPaymaster {
-    function payForGas(
-        bytes32,
-        uint32,
-        uint256,
-        address
-    ) external payable override {
+    function payForGas(bytes32, uint32, uint256, address) external payable override {
         // Mock implementation - just accept payment
     }
 
-    function quoteGasPayment(
-        uint32,
-        uint256
-    ) external pure override returns (uint256) {
+    function quoteGasPayment(uint32, uint256) external pure override returns (uint256) {
         // Return a fixed amount for testing
         return 1000;
     }
@@ -33,10 +25,7 @@ contract MockInterchainGasPaymaster is IInterchainGasPaymaster {
         return address(0);
     }
 
-    function setGasOracles(
-        uint32[] calldata,
-        address[] calldata
-    ) external pure {
+    function setGasOracles(uint32[] calldata, address[] calldata) external pure {
         // Mock implementation
     }
 

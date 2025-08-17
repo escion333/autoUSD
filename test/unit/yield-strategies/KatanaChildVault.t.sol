@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {Test, console2} from "forge-std/Test.sol";
-import {KatanaChildVault} from "../contracts/yield-strategies/KatanaChildVault.sol";
-import {MockERC20} from "./mocks/MockERC20.sol";
-import {MockCrossChainMessenger} from "./mocks/MockCrossChainMessenger.sol";
-import {MockCCTPBridge} from "./mocks/MockCCTPBridge.sol";
-import {MockTokenMessenger} from "./mocks/MockTokenMessenger.sol";
-import {MockMessageTransmitter} from "./mocks/MockMessageTransmitter.sol";
-import {IKatanaRouter} from "../contracts/interfaces/yield-strategies/IKatanaRouter.sol";
-import {IKatanaPair} from "../contracts/interfaces/yield-strategies/IKatanaPair.sol";
-import {ICrossChainMessenger} from "../contracts/interfaces/ICrossChainMessenger.sol";
-import {ERC20} from "openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
+import { Test, console2 } from "forge-std/Test.sol";
+import { KatanaChildVault } from "../../../contracts/yield-strategies/KatanaChildVault.sol";
+import { MockERC20 } from "../../mocks/MockERC20.sol";
+import { MockCrossChainMessenger } from "../../mocks/MockCrossChainMessenger.sol";
+import { MockCCTPBridge } from "../../mocks/MockCCTPBridge.sol";
+import { MockTokenMessenger } from "../../mocks/MockTokenMessenger.sol";
+import { MockMessageTransmitter } from "../../mocks/MockMessageTransmitter.sol";
+import { IKatanaRouter } from "../../../contracts/interfaces/yield-strategies/IKatanaRouter.sol";
+import { IKatanaPair } from "../../../contracts/interfaces/yield-strategies/IKatanaPair.sol";
+import { IMasterChef } from "../../../contracts/interfaces/yield-strategies/IMasterChef.sol";
+import { ICrossChainMessenger } from "../../../contracts/interfaces/ICrossChainMessenger.sol";
+import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 contract MockKatanaPair is IKatanaPair, MockERC20 {
     address public token0;
@@ -19,12 +20,12 @@ contract MockKatanaPair is IKatanaPair, MockERC20 {
     uint112 public reserve0;
     uint112 public reserve1;
 
-    constructor(string memory name, string memory symbol) MockERC20(name, symbol, 18) {}
+    constructor(string memory name, string memory symbol) MockERC20(name, symbol, 18) { }
 
     function setToken0(address _token0) external {
         token0 = _token0;
     }
-    
+
     function setToken1(address _token1) external {
         token1 = _token1;
     }
@@ -38,7 +39,7 @@ contract MockKatanaPair is IKatanaPair, MockERC20 {
         reserve1 = _reserve1;
     }
 
-    function totalSupply() public view override(IKatanaPair, ERC20) returns (uint256) {
+    function totalSupply() public view override (IKatanaPair, ERC20) returns (uint256) {
         return super.totalSupply();
     }
 }
@@ -50,24 +51,60 @@ contract MockKatanaRouter is IKatanaRouter {
         WETH = _weth;
     }
 
-    function addLiquidity(address, address, uint256, uint256, uint256, uint256, address, uint256) external pure returns (uint256, uint256, uint256) {
+    function addLiquidity(
+        address,
+        address,
+        uint256,
+        uint256,
+        uint256,
+        uint256,
+        address,
+        uint256
+    )
+        external
+        pure
+        returns (uint256, uint256, uint256)
+    {
         return (0, 0, 100 ether);
     }
 
-    function removeLiquidity(address, address, uint256, uint256, uint256, address, uint256) external pure returns (uint256, uint256) {
+    function removeLiquidity(
+        address,
+        address,
+        uint256,
+        uint256,
+        uint256,
+        address,
+        uint256
+    )
+        external
+        pure
+        returns (uint256, uint256)
+    {
         return (50 ether, 50 ether);
     }
 
-    function swapExactTokensForTokens(uint256 amountIn, uint256, address[] calldata, address, uint256) external pure returns (uint[] memory) {
-        uint[] memory amounts = new uint[](2);
+    function swapExactTokensForTokens(
+        uint256 amountIn,
+        uint256,
+        address[] calldata,
+        address,
+        uint256
+    )
+        external
+        pure
+        returns (uint256[] memory)
+    {
+        uint256[] memory amounts = new uint256[](2);
         amounts[0] = amountIn;
         amounts[1] = amountIn / 2;
         return amounts;
     }
 
-
-
-    function getAmountsOut(uint256 amountIn, address[] calldata /*path*/)
+    function getAmountsOut(
+        uint256 amountIn,
+        address[] calldata /*path*/
+    )
         external
         pure
         override
@@ -76,6 +113,23 @@ contract MockKatanaRouter is IKatanaRouter {
         amounts = new uint256[](2);
         amounts[0] = amountIn;
         amounts[1] = amountIn / 2; // Mock 2:1 price
+    }
+}
+
+contract MockMasterChef is IMasterChef {
+    mapping(uint256 => mapping(address => uint256)) public pendingRewards;
+
+    function pendingSushi(uint256 pid, address user) external view override returns (uint256) {
+        return pendingRewards[pid][user];
+    }
+
+    function harvest(uint256 pid, address to) external override {
+        // Simple harvest implementation - just clear pending rewards
+        pendingRewards[pid][to] = 0;
+    }
+
+    function setPendingRewards(uint256 pid, address user, uint256 amount) external {
+        pendingRewards[pid][user] = amount;
     }
 }
 
@@ -89,7 +143,7 @@ contract KatanaChildVaultTest is Test {
     MockCCTPBridge public cctpBridge;
     MockTokenMessenger public tokenMessenger;
     MockMessageTransmitter public messageTransmitter;
-    MockERC20 public masterChef;
+    MockMasterChef public masterChef;
     MockERC20 public sushiToken;
 
     address admin = address(this);
@@ -108,14 +162,10 @@ contract KatanaChildVaultTest is Test {
         messenger = new MockCrossChainMessenger();
         tokenMessenger = new MockTokenMessenger(address(usdc));
         messageTransmitter = new MockMessageTransmitter();
-        cctpBridge = new MockCCTPBridge(
-            address(usdc),
-            address(tokenMessenger),
-            address(messageTransmitter),
-            address(messenger)
-        );
-        
-        masterChef = new MockERC20("MasterChef", "CHEF", 18);
+        cctpBridge =
+            new MockCCTPBridge(address(usdc), address(tokenMessenger), address(messageTransmitter), address(messenger));
+
+        masterChef = new MockMasterChef();
         sushiToken = new MockERC20("SushiToken", "SUSHI", 18);
 
         mockPair.setToken0(address(usdc));
@@ -133,20 +183,20 @@ contract KatanaChildVaultTest is Test {
             admin
         );
         vault.setMotherVault(MOTHER_VAULT_ADDRESS, MOTHER_CHAIN_DOMAIN);
-        
+
         usdc.mint(address(vault), 1000e6);
         mockPair.mint(address(vault), 100e18); // Seed vault with LP tokens
     }
 
     function test_handleDeposit() public {
         uint256 depositAmount = 100e6;
-        
+
         // First, send USDC to the vault (simulating CCTP bridge transfer)
         usdc.mint(address(vault), depositAmount);
 
         bytes memory data = abi.encode(depositAmount);
         bytes memory message = abi.encode(ICrossChainMessenger.MessageType.DEPOSIT_REQUEST, data);
-        
+
         uint256 nav = vault._calculateNav();
         uint256 totalShares = vault.totalShares();
         uint256 sharesToMint = (depositAmount * totalShares) / nav;
@@ -155,7 +205,7 @@ contract KatanaChildVaultTest is Test {
         vm.expectEmit();
         emit Deposited(depositAmount, sharesToMint);
         vault.handle(MOTHER_CHAIN_DOMAIN, MOTHER_VAULT_SENDER, message);
-        
+
         assertEq(vault.totalShares(), totalShares + sharesToMint);
     }
 

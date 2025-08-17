@@ -1,0 +1,670 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.23;
+
+import {Test, console2} from "forge-std/Test.sol";
+import {Rebalancer} from "../../../contracts/core/Rebalancer.sol";
+import {IRebalancer} from "../../../contracts/interfaces/IRebalancer.sol";
+import {MockMotherVault} from "../../mocks/MockMotherVault.sol";
+import {MockCrossChainMessenger} from "../../mocks/MockCrossChainMessenger.sol";
+import {MockERC20} from "../../mocks/MockERC20.sol";
+
+/**
+ * @title RebalancerExtendedTest
+ * @notice Extended test suite for Rebalancer covering edge cases, access control, and complex scenarios
+ */
+contract RebalancerExtendedTest is Test {
+    Rebalancer public rebalancer;
+    MockMotherVault public motherVault;
+    MockCrossChainMessenger public messenger;
+    MockERC20 public usdc;
+    
+    address public admin = address(0x1);
+    address public operator = address(0x2);
+    address public user = address(0x3);
+    address public pauser = address(0x4);
+    
+    uint32 public constant BASE_DOMAIN = 8453;
+    uint32 public constant ARBITRUM_DOMAIN = 42161;
+    uint32 public constant OPTIMISM_DOMAIN = 10;
+    uint32 public constant POLYGON_DOMAIN = 137;
+    
+    // Events
+    event RebalanceInitiated(
+        bytes32 indexed rebalanceId,
+        uint32 sourceChain,
+        uint32 targetChain,
+        uint256 amount,
+        address indexed initiator
+    );
+    event RebalanceCompleted(
+        bytes32 indexed rebalanceId,
+        uint256 actualAmount,
+        uint256 gasUsed
+    );
+    event RebalanceFailed(
+        bytes32 indexed rebalanceId,
+        string reason,
+        uint256 timestamp
+    );
+    event APYThresholdUpdated(uint256 oldThreshold, uint256 newThreshold);
+    event RebalanceCooldownUpdated(uint256 oldCooldown, uint256 newCooldown);
+    event MaxRebalanceAmountUpdated(uint256 oldAmount, uint256 newAmount);
+    event EmergencyRebalanceExecuted(
+        uint32 sourceChain,
+        uint32 targetChain,
+        uint256 amount,
+        address indexed executor
+    );
+    
+    function setUp() public {
+        usdc = new MockERC20("USD Coin", "USDC", 6);
+        motherVault = new MockMotherVault(address(usdc));
+        messenger = new MockCrossChainMessenger();
+        
+        rebalancer = new Rebalancer(address(motherVault), address(messenger), admin);
+        
+        // Setup roles
+        vm.startPrank(admin);
+        rebalancer.grantRole(rebalancer.OPERATOR_ROLE(), operator);
+        rebalancer.grantRole(rebalancer.PAUSER_ROLE(), pauser);
+        vm.stopPrank();
+        
+        // Fund test accounts
+        usdc.mint(address(motherVault), 10_000_000e6);
+        deal(admin, 10 ether);
+        deal(operator, 10 ether);
+    }
+
+    // ===============================
+    // Constructor and Configuration Tests
+    // ===============================
+
+    function test_Constructor_InvalidAddresses() public {
+        vm.expectRevert("Invalid mother vault");
+        new Rebalancer(address(0), address(messenger), admin);
+        
+        vm.expectRevert("Invalid messenger");
+        new Rebalancer(address(motherVault), address(0), admin);
+        
+        vm.expectRevert("Invalid admin");
+        new Rebalancer(address(motherVault), address(messenger), address(0));
+    }
+
+    function test_Constructor_InitialState() public {
+        assertEq(address(rebalancer.motherVault()), address(motherVault));
+        assertEq(address(rebalancer.crossChainMessenger()), address(messenger));
+        assertTrue(rebalancer.hasRole(rebalancer.DEFAULT_ADMIN_ROLE(), admin));
+        assertTrue(rebalancer.hasRole(rebalancer.OPERATOR_ROLE(), admin));
+        assertEq(rebalancer.apyThreshold(), 500); // 5% default
+        assertEq(rebalancer.rebalanceCooldown(), 4 hours); // 4 hours default
+    }
+
+    function test_SetAPYThreshold() public {
+        uint256 newThreshold = 1000; // 10%
+        
+        vm.expectEmit(true, true, false, true);
+        emit APYThresholdUpdated(rebalancer.apyThreshold(), newThreshold);
+        
+        vm.prank(admin);
+        rebalancer.setAPYThreshold(newThreshold);
+        
+        assertEq(rebalancer.apyThreshold(), newThreshold);
+    }
+
+    function test_SetAPYThreshold_OnlyAdmin() public {
+        vm.prank(user);
+        vm.expectRevert();
+        rebalancer.setAPYThreshold(1000);
+    }
+
+    function test_SetAPYThreshold_ExceedsMaximum() public {
+        vm.prank(admin);
+        vm.expectRevert("APY threshold too high");
+        rebalancer.setAPYThreshold(10001); // > 100%
+    }
+
+    function test_SetRebalanceCooldown() public {
+        uint256 newCooldown = 8 hours;
+        
+        vm.expectEmit(true, true, false, true);
+        emit RebalanceCooldownUpdated(rebalancer.rebalanceCooldown(), newCooldown);
+        
+        vm.prank(admin);
+        rebalancer.setRebalanceCooldown(newCooldown);
+        
+        assertEq(rebalancer.rebalanceCooldown(), newCooldown);
+    }
+
+    function test_SetRebalanceCooldown_OnlyAdmin() public {
+        vm.prank(user);
+        vm.expectRevert();
+        rebalancer.setRebalanceCooldown(8 hours);
+    }
+
+    function test_SetRebalanceCooldown_ExceedsMaximum() public {
+        vm.prank(admin);
+        vm.expectRevert("Cooldown too long");
+        rebalancer.setRebalanceCooldown(25 hours); // > 24 hours
+    }
+
+    function test_SetMaxRebalanceAmount() public {
+        uint256 newMaxAmount = 2_000_000e6; // 2M USDC
+        
+        vm.expectEmit(true, true, false, true);
+        emit MaxRebalanceAmountUpdated(rebalancer.maxRebalanceAmount(), newMaxAmount);
+        
+        vm.prank(admin);
+        rebalancer.setMaxRebalanceAmount(newMaxAmount);
+        
+        assertEq(rebalancer.maxRebalanceAmount(), newMaxAmount);
+    }
+
+    function test_SetMaxRebalanceAmount_OnlyAdmin() public {
+        vm.prank(user);
+        vm.expectRevert();
+        rebalancer.setMaxRebalanceAmount(2_000_000e6);
+    }
+
+    // ===============================
+    // Rebalance Execution Tests
+    // ===============================
+
+    function test_ExecuteRebalance_Success() public {
+        uint32 sourceChain = ARBITRUM_DOMAIN;
+        uint32 targetChain = OPTIMISM_DOMAIN;
+        uint256 amount = 500_000e6;
+        
+        // Mock vault state to allow rebalance
+        motherVault.setChildVaultAPY(sourceChain, 300); // 3% APY
+        motherVault.setChildVaultAPY(targetChain, 800); // 8% APY  
+        motherVault.setChildVaultBalance(sourceChain, amount);
+        
+        vm.expectEmit(true, true, true, true);
+        emit RebalanceInitiated(bytes32(0), sourceChain, targetChain, amount, operator);
+        
+        vm.prank(operator);
+        bytes32 rebalanceId = rebalancer.executeRebalance(sourceChain, targetChain, amount);
+        
+        assertTrue(rebalanceId != bytes32(0));
+        
+        IRebalancer.RebalanceState memory state = rebalancer.getCurrentRebalance();
+        assertEq(state.sourceChain, sourceChain);
+        assertEq(state.targetChain, targetChain);
+        assertEq(state.amount, amount);
+        assertEq(uint8(state.status), uint8(IRebalancer.RebalanceStatus.IN_PROGRESS));
+    }
+
+    function test_ExecuteRebalance_OnlyOperator() public {
+        vm.prank(user);
+        vm.expectRevert();
+        rebalancer.executeRebalance(ARBITRUM_DOMAIN, OPTIMISM_DOMAIN, 100_000e6);
+    }
+
+    function test_ExecuteRebalance_WhenPaused() public {
+        vm.prank(pauser);
+        rebalancer.pause();
+        
+        vm.prank(operator);
+        vm.expectRevert("Pausable: paused");
+        rebalancer.executeRebalance(ARBITRUM_DOMAIN, OPTIMISM_DOMAIN, 100_000e6);
+    }
+
+    function test_ExecuteRebalance_ZeroAmount() public {
+        vm.prank(operator);
+        vm.expectRevert("Amount must be greater than zero");
+        rebalancer.executeRebalance(ARBITRUM_DOMAIN, OPTIMISM_DOMAIN, 0);
+    }
+
+    function test_ExecuteRebalance_SameChain() public {
+        vm.prank(operator);
+        vm.expectRevert("Source and target must be different");
+        rebalancer.executeRebalance(ARBITRUM_DOMAIN, ARBITRUM_DOMAIN, 100_000e6);
+    }
+
+    function test_ExecuteRebalance_ExceedsMaxAmount() public {
+        uint256 excessiveAmount = rebalancer.maxRebalanceAmount() + 1;
+        
+        vm.prank(operator);
+        vm.expectRevert("Amount exceeds maximum");
+        rebalancer.executeRebalance(ARBITRUM_DOMAIN, OPTIMISM_DOMAIN, excessiveAmount);
+    }
+
+    function test_ExecuteRebalance_InsufficientAPYDifferential() public {
+        uint32 sourceChain = ARBITRUM_DOMAIN;
+        uint32 targetChain = OPTIMISM_DOMAIN;
+        uint256 amount = 100_000e6;
+        
+        // Set APYs with insufficient differential
+        motherVault.setChildVaultAPY(sourceChain, 700); // 7% APY
+        motherVault.setChildVaultAPY(targetChain, 750); // 7.5% APY (only 0.5% diff)
+        motherVault.setChildVaultBalance(sourceChain, amount);
+        
+        vm.prank(operator);
+        vm.expectRevert("Insufficient APY differential");
+        rebalancer.executeRebalance(sourceChain, targetChain, amount);
+    }
+
+    function test_ExecuteRebalance_RebalanceInProgress() public {
+        uint32 sourceChain = ARBITRUM_DOMAIN;
+        uint32 targetChain = OPTIMISM_DOMAIN;
+        uint256 amount = 100_000e6;
+        
+        // Setup valid rebalance conditions
+        motherVault.setChildVaultAPY(sourceChain, 300); // 3% APY
+        motherVault.setChildVaultAPY(targetChain, 800); // 8% APY
+        motherVault.setChildVaultBalance(sourceChain, amount);
+        
+        // Start first rebalance
+        vm.prank(operator);
+        rebalancer.executeRebalance(sourceChain, targetChain, amount);
+        
+        // Try to start another rebalance
+        vm.prank(operator);
+        vm.expectRevert("Rebalance already in progress");
+        rebalancer.executeRebalance(OPTIMISM_DOMAIN, POLYGON_DOMAIN, amount);
+    }
+
+    function test_ExecuteRebalance_CooldownActive() public {
+        uint32 sourceChain = ARBITRUM_DOMAIN;
+        uint32 targetChain = OPTIMISM_DOMAIN;
+        uint256 amount = 100_000e6;
+        
+        // Setup valid conditions
+        motherVault.setChildVaultAPY(sourceChain, 300);
+        motherVault.setChildVaultAPY(targetChain, 800);
+        motherVault.setChildVaultBalance(sourceChain, amount);
+        
+        // Execute first rebalance
+        vm.prank(operator);
+        bytes32 rebalanceId = rebalancer.executeRebalance(sourceChain, targetChain, amount);
+        
+        // Complete the rebalance
+        vm.prank(operator);
+        rebalancer.completeRebalance(rebalanceId, amount, 100000);
+        
+        // Try to execute another rebalance immediately (should fail due to cooldown)
+        vm.prank(operator);
+        vm.expectRevert("Rebalance cooldown active");
+        rebalancer.executeRebalance(targetChain, sourceChain, amount);
+    }
+
+    // ===============================
+    // Rebalance Completion Tests
+    // ===============================
+
+    function test_CompleteRebalance_Success() public {
+        uint32 sourceChain = ARBITRUM_DOMAIN;
+        uint32 targetChain = OPTIMISM_DOMAIN;
+        uint256 amount = 100_000e6;
+        uint256 gasUsed = 500000;
+        
+        // Setup and execute rebalance
+        motherVault.setChildVaultAPY(sourceChain, 300);
+        motherVault.setChildVaultAPY(targetChain, 800);
+        motherVault.setChildVaultBalance(sourceChain, amount);
+        
+        vm.prank(operator);
+        bytes32 rebalanceId = rebalancer.executeRebalance(sourceChain, targetChain, amount);
+        
+        vm.expectEmit(true, true, true, true);
+        emit RebalanceCompleted(rebalanceId, amount, gasUsed);
+        
+        vm.prank(operator);
+        rebalancer.completeRebalance(rebalanceId, amount, gasUsed);
+        
+        IRebalancer.RebalanceState memory state = rebalancer.getCurrentRebalance();
+        assertEq(uint8(state.status), uint8(IRebalancer.RebalanceStatus.COMPLETED));
+    }
+
+    function test_CompleteRebalance_OnlyOperator() public {
+        bytes32 rebalanceId = keccak256("test");
+        
+        vm.prank(user);
+        vm.expectRevert();
+        rebalancer.completeRebalance(rebalanceId, 100_000e6, 100000);
+    }
+
+    function test_CompleteRebalance_InvalidRebalanceId() public {
+        bytes32 invalidId = keccak256("invalid");
+        
+        vm.prank(operator);
+        vm.expectRevert("Invalid rebalance ID");
+        rebalancer.completeRebalance(invalidId, 100_000e6, 100000);
+    }
+
+    function test_CompleteRebalance_NotInProgress() public {
+        uint32 sourceChain = ARBITRUM_DOMAIN;
+        uint32 targetChain = OPTIMISM_DOMAIN;
+        uint256 amount = 100_000e6;
+        
+        // Setup and execute rebalance
+        motherVault.setChildVaultAPY(sourceChain, 300);
+        motherVault.setChildVaultAPY(targetChain, 800);
+        motherVault.setChildVaultBalance(sourceChain, amount);
+        
+        vm.prank(operator);
+        bytes32 rebalanceId = rebalancer.executeRebalance(sourceChain, targetChain, amount);
+        
+        // Complete it once
+        vm.prank(operator);
+        rebalancer.completeRebalance(rebalanceId, amount, 100000);
+        
+        // Try to complete again
+        vm.prank(operator);
+        vm.expectRevert("Rebalance not in progress");
+        rebalancer.completeRebalance(rebalanceId, amount, 100000);
+    }
+
+    // ===============================
+    // Rebalance Failure Tests
+    // ===============================
+
+    function test_FailRebalance_Success() public {
+        uint32 sourceChain = ARBITRUM_DOMAIN;
+        uint32 targetChain = OPTIMISM_DOMAIN;
+        uint256 amount = 100_000e6;
+        string memory reason = "Network congestion";
+        
+        // Setup and execute rebalance
+        motherVault.setChildVaultAPY(sourceChain, 300);
+        motherVault.setChildVaultAPY(targetChain, 800);
+        motherVault.setChildVaultBalance(sourceChain, amount);
+        
+        vm.prank(operator);
+        bytes32 rebalanceId = rebalancer.executeRebalance(sourceChain, targetChain, amount);
+        
+        vm.expectEmit(true, true, true, true);
+        emit RebalanceFailed(rebalanceId, reason, block.timestamp);
+        
+        vm.prank(operator);
+        rebalancer.failRebalance(rebalanceId, reason);
+        
+        IRebalancer.RebalanceState memory state = rebalancer.getCurrentRebalance();
+        assertEq(uint8(state.status), uint8(IRebalancer.RebalanceStatus.FAILED));
+    }
+
+    function test_FailRebalance_OnlyOperator() public {
+        bytes32 rebalanceId = keccak256("test");
+        
+        vm.prank(user);
+        vm.expectRevert();
+        rebalancer.failRebalance(rebalanceId, "test reason");
+    }
+
+    function test_FailRebalance_InvalidRebalanceId() public {
+        bytes32 invalidId = keccak256("invalid");
+        
+        vm.prank(operator);
+        vm.expectRevert("Invalid rebalance ID");
+        rebalancer.failRebalance(invalidId, "test reason");
+    }
+
+    function test_FailRebalance_EmptyReason() public {
+        uint32 sourceChain = ARBITRUM_DOMAIN;
+        uint32 targetChain = OPTIMISM_DOMAIN;
+        uint256 amount = 100_000e6;
+        
+        // Setup and execute rebalance
+        motherVault.setChildVaultAPY(sourceChain, 300);
+        motherVault.setChildVaultAPY(targetChain, 800);
+        motherVault.setChildVaultBalance(sourceChain, amount);
+        
+        vm.prank(operator);
+        bytes32 rebalanceId = rebalancer.executeRebalance(sourceChain, targetChain, amount);
+        
+        vm.prank(operator);
+        vm.expectRevert("Reason cannot be empty");
+        rebalancer.failRebalance(rebalanceId, "");
+    }
+
+    // ===============================
+    // Emergency Functions Tests
+    // ===============================
+
+    function test_EmergencyRebalance() public {
+        uint32 sourceChain = ARBITRUM_DOMAIN;
+        uint32 targetChain = OPTIMISM_DOMAIN;
+        uint256 amount = 200_000e6;
+        
+        motherVault.setChildVaultBalance(sourceChain, amount);
+        
+        vm.expectEmit(true, true, true, true);
+        emit EmergencyRebalanceExecuted(sourceChain, targetChain, amount, admin);
+        
+        vm.prank(admin);
+        rebalancer.emergencyRebalance(sourceChain, targetChain, amount);
+    }
+
+    function test_EmergencyRebalance_OnlyAdmin() public {
+        vm.prank(user);
+        vm.expectRevert();
+        rebalancer.emergencyRebalance(ARBITRUM_DOMAIN, OPTIMISM_DOMAIN, 100_000e6);
+    }
+
+    function test_CancelRebalance() public {
+        uint32 sourceChain = ARBITRUM_DOMAIN;
+        uint32 targetChain = OPTIMISM_DOMAIN;
+        uint256 amount = 100_000e6;
+        
+        // Setup and execute rebalance
+        motherVault.setChildVaultAPY(sourceChain, 300);
+        motherVault.setChildVaultAPY(targetChain, 800);
+        motherVault.setChildVaultBalance(sourceChain, amount);
+        
+        vm.prank(operator);
+        bytes32 rebalanceId = rebalancer.executeRebalance(sourceChain, targetChain, amount);
+        
+        vm.prank(admin);
+        rebalancer.cancelRebalance(rebalanceId);
+        
+        IRebalancer.RebalanceState memory state = rebalancer.getCurrentRebalance();
+        assertEq(uint8(state.status), uint8(IRebalancer.RebalanceStatus.CANCELLED));
+    }
+
+    function test_CancelRebalance_OnlyAdmin() public {
+        bytes32 rebalanceId = keccak256("test");
+        
+        vm.prank(user);
+        vm.expectRevert();
+        rebalancer.cancelRebalance(rebalanceId);
+    }
+
+    // ===============================
+    // Getter Functions Tests
+    // ===============================
+
+    function test_CanRebalance_ValidConditions() public {
+        uint32 sourceChain = ARBITRUM_DOMAIN;
+        uint32 targetChain = OPTIMISM_DOMAIN;
+        uint256 amount = 100_000e6;
+        
+        motherVault.setChildVaultAPY(sourceChain, 300); // 3% APY
+        motherVault.setChildVaultAPY(targetChain, 800); // 8% APY
+        motherVault.setChildVaultBalance(sourceChain, amount);
+        
+        (bool canRebalance, string memory reason) = rebalancer.canRebalance(sourceChain, targetChain, amount);
+        assertTrue(canRebalance);
+        assertEq(bytes(reason).length, 0);
+    }
+
+    function test_CanRebalance_InsufficientAPYDifferential() public {
+        uint32 sourceChain = ARBITRUM_DOMAIN;
+        uint32 targetChain = OPTIMISM_DOMAIN;
+        uint256 amount = 100_000e6;
+        
+        motherVault.setChildVaultAPY(sourceChain, 700); // 7% APY
+        motherVault.setChildVaultAPY(targetChain, 750); // 7.5% APY
+        
+        (bool canRebalance, string memory reason) = rebalancer.canRebalance(sourceChain, targetChain, amount);
+        assertFalse(canRebalance);
+        assertEq(reason, "Insufficient APY differential");
+    }
+
+    function test_GetRebalanceHistory() public {
+        bytes32[] memory history = rebalancer.getRebalanceHistory();
+        assertEq(history.length, 0);
+    }
+
+    function test_IsRebalanceInProgress_False() public {
+        assertFalse(rebalancer.isRebalanceInProgress());
+    }
+
+    function test_IsRebalanceInProgress_True() public {
+        uint32 sourceChain = ARBITRUM_DOMAIN;
+        uint32 targetChain = OPTIMISM_DOMAIN;
+        uint256 amount = 100_000e6;
+        
+        motherVault.setChildVaultAPY(sourceChain, 300);
+        motherVault.setChildVaultAPY(targetChain, 800);
+        motherVault.setChildVaultBalance(sourceChain, amount);
+        
+        vm.prank(operator);
+        rebalancer.executeRebalance(sourceChain, targetChain, amount);
+        
+        assertTrue(rebalancer.isRebalanceInProgress());
+    }
+
+    function test_GetLastRebalanceTime() public {
+        assertEq(rebalancer.getLastRebalanceTime(), 0);
+    }
+
+    // ===============================
+    // Pausable Tests
+    // ===============================
+
+    function test_Pause() public {
+        vm.prank(pauser);
+        rebalancer.pause();
+        
+        assertTrue(rebalancer.paused());
+    }
+
+    function test_Unpause() public {
+        vm.prank(pauser);
+        rebalancer.pause();
+        
+        vm.prank(pauser);
+        rebalancer.unpause();
+        
+        assertFalse(rebalancer.paused());
+    }
+
+    function test_Pause_OnlyPauser() public {
+        vm.prank(user);
+        vm.expectRevert();
+        rebalancer.pause();
+    }
+
+    // ===============================
+    // Access Control Tests
+    // ===============================
+
+    function test_GrantOperatorRole() public {
+        address newOperator = address(0x999);
+        
+        vm.prank(admin);
+        rebalancer.grantRole(rebalancer.OPERATOR_ROLE(), newOperator);
+        
+        assertTrue(rebalancer.hasRole(rebalancer.OPERATOR_ROLE(), newOperator));
+    }
+
+    function test_RevokeOperatorRole() public {
+        vm.prank(admin);
+        rebalancer.revokeRole(rebalancer.OPERATOR_ROLE(), operator);
+        
+        assertFalse(rebalancer.hasRole(rebalancer.OPERATOR_ROLE(), operator));
+    }
+
+    // ===============================
+    // Edge Cases and Fuzz Tests
+    // ===============================
+
+    function testFuzz_ValidRebalanceAmounts(uint256 amount) public {
+        amount = bound(amount, 1, rebalancer.maxRebalanceAmount());
+        
+        uint32 sourceChain = ARBITRUM_DOMAIN;
+        uint32 targetChain = OPTIMISM_DOMAIN;
+        
+        motherVault.setChildVaultAPY(sourceChain, 300);
+        motherVault.setChildVaultAPY(targetChain, 800);
+        motherVault.setChildVaultBalance(sourceChain, amount);
+        
+        vm.prank(operator);
+        bytes32 rebalanceId = rebalancer.executeRebalance(sourceChain, targetChain, amount);
+        
+        assertTrue(rebalanceId != bytes32(0));
+    }
+
+    function testFuzz_APYThreshold(uint256 threshold) public {
+        threshold = bound(threshold, 0, 10000); // 0-100%
+        
+        vm.prank(admin);
+        rebalancer.setAPYThreshold(threshold);
+        
+        assertEq(rebalancer.apyThreshold(), threshold);
+    }
+
+    function testFuzz_RebalanceCooldown(uint256 cooldown) public {
+        cooldown = bound(cooldown, 0, 24 hours);
+        
+        vm.prank(admin);
+        rebalancer.setRebalanceCooldown(cooldown);
+        
+        assertEq(rebalancer.rebalanceCooldown(), cooldown);
+    }
+
+    function test_MultipleRebalancesOverTime() public {
+        uint32 sourceChain = ARBITRUM_DOMAIN;
+        uint32 targetChain = OPTIMISM_DOMAIN;
+        uint256 amount = 100_000e6;
+        
+        // Setup conditions
+        motherVault.setChildVaultAPY(sourceChain, 300);
+        motherVault.setChildVaultAPY(targetChain, 800);
+        motherVault.setChildVaultBalance(sourceChain, amount);
+        
+        // First rebalance
+        vm.prank(operator);
+        bytes32 rebalanceId1 = rebalancer.executeRebalance(sourceChain, targetChain, amount);
+        
+        vm.prank(operator);
+        rebalancer.completeRebalance(rebalanceId1, amount, 100000);
+        
+        // Wait for cooldown
+        vm.warp(block.timestamp + rebalancer.rebalanceCooldown() + 1);
+        
+        // Second rebalance
+        motherVault.setChildVaultAPY(targetChain, 300);
+        motherVault.setChildVaultAPY(sourceChain, 800);
+        motherVault.setChildVaultBalance(targetChain, amount);
+        
+        vm.prank(operator);
+        bytes32 rebalanceId2 = rebalancer.executeRebalance(targetChain, sourceChain, amount);
+        
+        assertTrue(rebalanceId1 != rebalanceId2);
+    }
+
+    function test_RebalanceAfterFailure() public {
+        uint32 sourceChain = ARBITRUM_DOMAIN;
+        uint32 targetChain = OPTIMISM_DOMAIN;
+        uint256 amount = 100_000e6;
+        
+        // Setup conditions
+        motherVault.setChildVaultAPY(sourceChain, 300);
+        motherVault.setChildVaultAPY(targetChain, 800);
+        motherVault.setChildVaultBalance(sourceChain, amount);
+        
+        // First rebalance that fails
+        vm.prank(operator);
+        bytes32 rebalanceId1 = rebalancer.executeRebalance(sourceChain, targetChain, amount);
+        
+        vm.prank(operator);
+        rebalancer.failRebalance(rebalanceId1, "Network error");
+        
+        // Should be able to start new rebalance immediately after failure
+        vm.prank(operator);
+        bytes32 rebalanceId2 = rebalancer.executeRebalance(sourceChain, targetChain, amount);
+        
+        assertTrue(rebalanceId1 != rebalanceId2);
+    }
+}

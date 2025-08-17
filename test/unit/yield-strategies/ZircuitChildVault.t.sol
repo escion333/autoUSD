@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.23;
+pragma solidity 0.8.23;
 
-import {Test, console} from "forge-std/Test.sol";
-import {ZircuitChildVault} from "../contracts/yield-strategies/ZircuitChildVault.sol";
-import {MockERC20} from "./mocks/MockERC20.sol";
-import {MockCCTPBridge} from "./mocks/MockCCTPBridge.sol";
-import {MockCrossChainMessenger} from "./mocks/MockCrossChainMessenger.sol";
-import {MockTokenMessenger} from "./mocks/MockTokenMessenger.sol";
-import {MockMessageTransmitter} from "./mocks/MockMessageTransmitter.sol";
-import {ERC20} from "openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
-import {IZuitRouter} from "../contracts/interfaces/yield-strategies/IZuitRouter.sol";
-import {ICrossChainMessenger} from "../contracts/interfaces/ICrossChainMessenger.sol";
-import {IZuitPair} from "../contracts/interfaces/yield-strategies/IZuitPair.sol";
+import { Test, console } from "forge-std/Test.sol";
+import { ZircuitChildVault } from "../../../contracts/yield-strategies/ZircuitChildVault.sol";
+import { MockERC20 } from "../../mocks/MockERC20.sol";
+import { MockCCTPBridge } from "../../mocks/MockCCTPBridge.sol";
+import { MockCrossChainMessenger } from "../../mocks/MockCrossChainMessenger.sol";
+import { MockTokenMessenger } from "../../mocks/MockTokenMessenger.sol";
+import { MockMessageTransmitter } from "../../mocks/MockMessageTransmitter.sol";
+import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import { IZuitRouter } from "../../../contracts/interfaces/yield-strategies/IZuitRouter.sol";
+import { ICrossChainMessenger } from "../../../contracts/interfaces/ICrossChainMessenger.sol";
+import { IZuitPair } from "../../../contracts/interfaces/yield-strategies/IZuitPair.sol";
 
 // Mock Zuit Router for testing purposes
 contract MockZuitRouter is IZuitRouter {
@@ -28,13 +28,16 @@ contract MockZuitRouter is IZuitRouter {
         address[] calldata path,
         address to,
         uint256 // deadline
-    ) external returns (uint256[] memory amounts) {
+    )
+        external
+        returns (uint256[] memory amounts)
+    {
         require(path.length == 2, "Invalid path");
         // This mock doesn't handle transfers, assumes tokens are available
-        
-        uint256 amountOut = amountIn; 
+
+        uint256 amountOut = amountIn;
         MockERC20(path[1]).mint(to, amountOut);
-        
+
         amounts = new uint256[](2);
         amounts[0] = amountIn;
         amounts[1] = amountOut;
@@ -50,7 +53,10 @@ contract MockZuitRouter is IZuitRouter {
         uint256, // amountBMin
         address to,
         uint256 // deadline
-    ) external returns (uint256 amountA, uint256 amountB, uint256 liquidity) {
+    )
+        external
+        returns (uint256 amountA, uint256 amountB, uint256 liquidity)
+    {
         address pair = pairs[tokenA][tokenB];
         // Mock transfers
         liquidity = amountADesired + amountBDesired;
@@ -66,7 +72,10 @@ contract MockZuitRouter is IZuitRouter {
         uint256, // amountBMin
         address to,
         uint256 // deadline
-    ) external returns (uint256 amountA, uint256 amountB) {
+    )
+        external
+        returns (uint256 amountA, uint256 amountB)
+    {
         // Mock transfers
         amountA = liquidity / 2;
         amountB = liquidity / 2;
@@ -75,7 +84,10 @@ contract MockZuitRouter is IZuitRouter {
         return (amountA, amountB);
     }
 
-    function getAmountsOut(uint256 amountIn, address[] calldata /*path*/)
+    function getAmountsOut(
+        uint256 amountIn,
+        address[] calldata /*path*/
+    )
         external
         pure
         override
@@ -100,15 +112,7 @@ contract MockZuitPair is MockERC20, IZuitPair {
         token1 = _token1;
     }
 
-    function getReserves()
-        external
-        view
-        returns (
-            uint112 _reserve0,
-            uint112 _reserve1,
-            uint32 blockTimestampLast
-        )
-    {
+    function getReserves() external view returns (uint112 _reserve0, uint112 _reserve1, uint32 blockTimestampLast) {
         return (reserve0, reserve1, uint32(block.timestamp));
     }
 
@@ -116,8 +120,8 @@ contract MockZuitPair is MockERC20, IZuitPair {
         reserve0 = _reserve0;
         reserve1 = _reserve1;
     }
-    
-    function totalSupply() public view override(ERC20, IZuitPair) returns (uint256) {
+
+    function totalSupply() public view override (ERC20, IZuitPair) returns (uint256) {
         return super.totalSupply();
     }
 }
@@ -138,7 +142,6 @@ contract ZircuitChildVaultTest is Test {
     uint32 motherChainDomain = 1;
     bytes32 MOTHER_VAULT_SENDER;
 
-
     uint256 constant INITIAL_DEPOSIT = 10_000e6;
 
     event Deposited(uint256 amount, uint256 sharesMinted);
@@ -146,7 +149,6 @@ contract ZircuitChildVaultTest is Test {
     event ProfitReported(uint256 profit);
     event PairAdded(uint256 indexed pairId, address indexed tokenB, address indexed pairAddress);
     event EmergencyWithdrawal(uint256 usdcAmount);
-
 
     function setUp() public {
         MOTHER_VAULT_SENDER = bytes32(uint256(uint160(motherVault)));
@@ -158,21 +160,13 @@ contract ZircuitChildVaultTest is Test {
         messageTransmitter = new MockMessageTransmitter();
         crossChainMessenger = new MockCrossChainMessenger();
         cctpBridge = new MockCCTPBridge(
-            address(usdc),
-            address(tokenMessenger),
-            address(messageTransmitter),
-            address(crossChainMessenger)
+            address(usdc), address(tokenMessenger), address(messageTransmitter), address(crossChainMessenger)
         );
 
         router.addPair(address(usdc), address(usdt), address(pairUsdcUsdt));
         pairUsdcUsdt.setReserves(1_000_000e6, 1_000_000e6);
 
-        vault = new ZircuitChildVault(
-            address(usdc),
-            address(crossChainMessenger),
-            address(cctpBridge),
-            admin
-        );
+        vault = new ZircuitChildVault(address(usdc), address(crossChainMessenger), address(cctpBridge), admin);
 
         vault.setMotherVault(motherVault, motherChainDomain);
         vault.addPair(address(usdt), address(pairUsdcUsdt), address(router));
@@ -180,19 +174,19 @@ contract ZircuitChildVaultTest is Test {
 
     function test_HandleDeposit() public {
         usdc.mint(address(vault), INITIAL_DEPOSIT);
-        
+
         bytes memory data = abi.encode(INITIAL_DEPOSIT);
         bytes memory message = abi.encode(ICrossChainMessenger.MessageType.DEPOSIT_REQUEST, data);
-        
+
         uint256 nav = vault._calculateNav();
         uint256 totalShares = vault.totalShares();
         uint256 expectedShares = (INITIAL_DEPOSIT * totalShares) / nav;
-        
+
         vm.prank(crossChainMessenger.getHyperlaneMailbox());
         vm.expectEmit();
         emit Deposited(INITIAL_DEPOSIT, expectedShares);
         vault.handle(motherChainDomain, MOTHER_VAULT_SENDER, message);
-        
+
         assertGt(vault.getPairInfo(0).lpTokenBalance, 0);
     }
 
@@ -203,7 +197,6 @@ contract ZircuitChildVaultTest is Test {
         bytes memory message = abi.encode(ICrossChainMessenger.MessageType.DEPOSIT_REQUEST, data);
         vm.prank(crossChainMessenger.getHyperlaneMailbox());
         vault.handle(motherChainDomain, MOTHER_VAULT_SENDER, message);
-
 
         uint256 withdrawAmount = INITIAL_DEPOSIT / 2;
         uint256 nav = vault._calculateNav();
@@ -223,10 +216,10 @@ contract ZircuitChildVaultTest is Test {
         bytes memory message = abi.encode(ICrossChainMessenger.MessageType.DEPOSIT_REQUEST, data);
         vm.prank(crossChainMessenger.getHyperlaneMailbox());
         vault.handle(motherChainDomain, MOTHER_VAULT_SENDER, message);
-        
+
         // Simulate profit by adjusting reserves
         pairUsdcUsdt.setReserves(1_100_000e6, 1_100_000e6);
-        
+
         uint256 currentNav = vault._calculateNav();
         uint256 lastNav = vault.lastHarvestNav();
         uint256 expectedProfit = currentNav > lastNav ? currentNav - lastNav : 0;
@@ -236,7 +229,7 @@ contract ZircuitChildVaultTest is Test {
         emit ProfitReported(expectedProfit);
         vault.harvest();
     }
-    
+
     function test_EmergencyWithdraw() public {
         // Deposit first
         usdc.mint(address(vault), INITIAL_DEPOSIT);
@@ -246,7 +239,7 @@ contract ZircuitChildVaultTest is Test {
         vault.handle(motherChainDomain, MOTHER_VAULT_SENDER, message);
 
         assertGt(vault.getPairInfo(0).lpTokenBalance, 0);
-        
+
         uint256 lpBalance = vault.getPairInfo(0).lpTokenBalance;
         // Based on mock logic: removeLiquidity returns lp/2 of each token. Swap is 1:1.
         // So total USDC recovered is (lpBalance / 2) + (lpBalance / 2) = lpBalance.
@@ -255,7 +248,7 @@ contract ZircuitChildVaultTest is Test {
         vm.expectEmit();
         emit EmergencyWithdrawal(expectedUsdcAmount);
         vault.emergencyWithdraw();
-        
+
         assertEq(vault.getPairInfo(0).lpTokenBalance, 0);
         assertGt(usdc.balanceOf(address(vault)), 0);
     }

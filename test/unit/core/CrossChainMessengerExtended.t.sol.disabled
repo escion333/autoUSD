@@ -1,0 +1,627 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.23;
+
+import {Test, console2} from "forge-std/Test.sol";
+import {CrossChainMessenger} from "../../../contracts/core/CrossChainMessenger.sol";
+import {CCTPBridge} from "../../../contracts/core/CCTPBridge.sol";
+import {ICrossChainMessenger} from "../../../contracts/interfaces/ICrossChainMessenger.sol";
+import {MockERC20} from "../../mocks/MockERC20.sol";
+import {MockMailbox} from "../../mocks/MockMailbox.sol";
+import {MockInterchainGasPaymaster} from "../../mocks/MockInterchainGasPaymaster.sol";
+import {MockTokenMessenger} from "../../mocks/MockTokenMessenger.sol";
+import {MockMessageTransmitter} from "../../mocks/MockMessageTransmitter.sol";
+import {MockMotherVault} from "../../mocks/MockMotherVault.sol";
+
+/**
+ * @title CrossChainMessengerExtendedTest
+ * @notice Extended test suite for CrossChainMessenger covering edge cases, retry mechanisms, and governance
+ */
+contract CrossChainMessengerExtendedTest is Test {
+    CrossChainMessenger public messenger;
+    CCTPBridge public cctpBridge;
+    MockMailbox public mailbox;
+    MockInterchainGasPaymaster public gasPaymaster;
+    MockTokenMessenger public tokenMessenger;
+    MockMessageTransmitter public messageTransmitter;
+    MockMotherVault public motherVault;
+    MockERC20 public usdc;
+
+    address public admin = address(0x1);
+    address public childVault = address(0x2);
+    address public user = address(0x3);
+    address public pauser = address(0x4);
+    address public retrier = address(0x5);
+    address public messenger_role = address(0x6);
+
+    uint32 public constant BASE_DOMAIN = 8453;
+    uint32 public constant ARBITRUM_DOMAIN = 42161;
+    uint32 public constant OPTIMISM_DOMAIN = 10;
+    uint32 public constant UNTRUSTED_DOMAIN = 999;
+    bytes32 public constant TRUSTED_SENDER = bytes32(uint256(uint160(address(0x100))));
+    bytes32 public constant UNTRUSTED_SENDER = bytes32(uint256(uint160(address(0x999))));
+
+    // Events
+    event MessageSent(bytes32 indexed messageId, uint32 targetChainId, ICrossChainMessenger.MessageType messageType);
+    event MessageReceived(bytes32 indexed messageId, uint32 originChainId, ICrossChainMessenger.MessageType messageType);
+    event MessageProcessed(bytes32 indexed messageId, bool success, bytes returnData);
+    event MessageFailed(bytes32 indexed messageId, string reason, uint256 timestamp);
+    event MessageRetryScheduled(bytes32 indexed messageId, uint256 attempt, uint256 nextRetryTime);
+    event MessageRetryFailed(bytes32 indexed messageId, uint256 totalAttempts);
+    event MessageManuallyRetried(bytes32 indexed messageId, bytes32 newMessageId);
+    event TrustedSenderSet(uint32 indexed domain, bytes32 indexed sender);
+    event DomainConfigured(uint256 chainId, uint32 domain, bool trusted);
+
+    function setUp() public {
+        // Deploy mocks
+        usdc = new MockERC20("USD Coin", "USDC", 6);
+        mailbox = new MockMailbox();
+        gasPaymaster = new MockInterchainGasPaymaster();
+        tokenMessenger = new MockTokenMessenger(address(usdc));
+        messageTransmitter = new MockMessageTransmitter();
+        motherVault = new MockMotherVault(address(usdc));
+
+        // Deploy CCTP Bridge
+        cctpBridge = new CCTPBridge(
+            address(tokenMessenger),
+            address(messageTransmitter),
+            address(usdc),
+            admin
+        );
+
+        // Deploy CrossChainMessenger
+        messenger = new CrossChainMessenger(
+            address(mailbox),
+            address(gasPaymaster),
+            address(cctpBridge),
+            address(motherVault),
+            admin
+        );
+
+        // Setup roles
+        vm.startPrank(admin);
+        messenger.grantRole(messenger.PAUSER_ROLE(), pauser);
+        messenger.grantRole(messenger.RETRIER_ROLE(), retrier);
+        messenger.grantRole(messenger.MESSENGER_ROLE(), messenger_role);
+        messenger.setTrustedSender(ARBITRUM_DOMAIN, TRUSTED_SENDER);
+        messenger.setTrustedSender(OPTIMISM_DOMAIN, TRUSTED_SENDER);
+        vm.stopPrank();
+
+        // Fund accounts
+        deal(admin, 10 ether);
+        deal(user, 10 ether);
+        deal(address(messenger), 10 ether);
+        usdc.mint(admin, 1_000_000e6);
+        usdc.mint(user, 1_000_000e6);
+    }
+
+    // ===============================
+    // Constructor and Configuration Tests
+    // ===============================
+
+    function test_Constructor_InvalidAddresses() public {
+        vm.expectRevert("Invalid mailbox");
+        new CrossChainMessenger(address(0), address(gasPaymaster), address(cctpBridge), address(motherVault), admin);
+        
+        vm.expectRevert("Invalid gas paymaster");
+        new CrossChainMessenger(address(mailbox), address(0), address(cctpBridge), address(motherVault), admin);
+        
+        vm.expectRevert("Invalid CCTP bridge");
+        new CrossChainMessenger(address(mailbox), address(gasPaymaster), address(0), address(motherVault), admin);
+        
+        vm.expectRevert("Invalid mother vault");
+        new CrossChainMessenger(address(mailbox), address(gasPaymaster), address(cctpBridge), address(0), admin);
+        
+        vm.expectRevert("Invalid admin");
+        new CrossChainMessenger(address(mailbox), address(gasPaymaster), address(cctpBridge), address(motherVault), address(0));
+    }
+
+    function test_SetTrustedSender() public {
+        bytes32 newSender = bytes32(uint256(uint160(address(0x200))));
+        
+        vm.expectEmit(true, true, false, true);
+        emit TrustedSenderSet(BASE_DOMAIN, newSender);
+        
+        vm.prank(admin);
+        messenger.setTrustedSender(BASE_DOMAIN, newSender);
+        
+        assertEq(messenger.trustedSenders(BASE_DOMAIN), newSender);
+        assertTrue(messenger.trustedDomains(BASE_DOMAIN));
+    }
+
+    function test_SetTrustedSender_OnlyAdmin() public {
+        vm.prank(user);
+        vm.expectRevert();
+        messenger.setTrustedSender(BASE_DOMAIN, TRUSTED_SENDER);
+    }
+
+    function test_RemoveTrustedSender() public {
+        vm.prank(admin);
+        messenger.removeTrustedSender(ARBITRUM_DOMAIN);
+        
+        assertEq(messenger.trustedSenders(ARBITRUM_DOMAIN), bytes32(0));
+        assertFalse(messenger.trustedDomains(ARBITRUM_DOMAIN));
+    }
+
+    // ===============================
+    // Message Sending Tests
+    // ===============================
+
+    function test_SendCrossChainMessage_ValidMessage() public {
+        ICrossChainMessenger.CrossChainMessage memory message = ICrossChainMessenger.CrossChainMessage({
+            targetChainId: ARBITRUM_DOMAIN,
+            targetVault: childVault,
+            messageType: ICrossChainMessenger.MessageType.DEPOSIT_REQUEST,
+            payload: abi.encode(100e6),
+            nonce: 0,
+            timestamp: block.timestamp
+        });
+
+        uint256 gasPayment = 1000;
+        
+        vm.expectEmit(true, true, true, false);
+        emit MessageSent(bytes32(0), ARBITRUM_DOMAIN, ICrossChainMessenger.MessageType.DEPOSIT_REQUEST);
+        
+        vm.prank(messenger_role);
+        bytes32 messageId = messenger.sendCrossChainMessage{value: gasPayment}(message);
+        
+        assertTrue(messageId != bytes32(0));
+    }
+
+    function test_SendCrossChainMessage_OnlyMessengerRole() public {
+        ICrossChainMessenger.CrossChainMessage memory message = ICrossChainMessenger.CrossChainMessage({
+            targetChainId: ARBITRUM_DOMAIN,
+            targetVault: childVault,
+            messageType: ICrossChainMessenger.MessageType.DEPOSIT_REQUEST,
+            payload: abi.encode(100e6),
+            nonce: 0,
+            timestamp: block.timestamp
+        });
+
+        vm.prank(user);
+        vm.expectRevert();
+        messenger.sendCrossChainMessage{value: 1000}(message);
+    }
+
+    function test_SendCrossChainMessage_WhenPaused() public {
+        vm.prank(pauser);
+        messenger.pause();
+        
+        ICrossChainMessenger.CrossChainMessage memory message = ICrossChainMessenger.CrossChainMessage({
+            targetChainId: ARBITRUM_DOMAIN,
+            targetVault: childVault,
+            messageType: ICrossChainMessenger.MessageType.DEPOSIT_REQUEST,
+            payload: abi.encode(100e6),
+            nonce: 0,
+            timestamp: block.timestamp
+        });
+
+        vm.prank(messenger_role);
+        vm.expectRevert("Pausable: paused");
+        messenger.sendCrossChainMessage{value: 1000}(message);
+    }
+
+    function test_SendCrossChainMessage_UntrustedDomain() public {
+        ICrossChainMessenger.CrossChainMessage memory message = ICrossChainMessenger.CrossChainMessage({
+            targetChainId: UNTRUSTED_DOMAIN,
+            targetVault: childVault,
+            messageType: ICrossChainMessenger.MessageType.DEPOSIT_REQUEST,
+            payload: abi.encode(100e6),
+            nonce: 0,
+            timestamp: block.timestamp
+        });
+
+        vm.prank(messenger_role);
+        vm.expectRevert(abi.encodeWithSelector(CrossChainMessenger.UntrustedDomain.selector, UNTRUSTED_DOMAIN));
+        messenger.sendCrossChainMessage{value: 1000}(message);
+    }
+
+    function test_SendCrossChainMessage_ZeroTargetVault() public {
+        ICrossChainMessenger.CrossChainMessage memory message = ICrossChainMessenger.CrossChainMessage({
+            targetChainId: ARBITRUM_DOMAIN,
+            targetVault: address(0),
+            messageType: ICrossChainMessenger.MessageType.DEPOSIT_REQUEST,
+            payload: abi.encode(100e6),
+            nonce: 0,
+            timestamp: block.timestamp
+        });
+
+        vm.prank(messenger_role);
+        vm.expectRevert("Invalid target vault");
+        messenger.sendCrossChainMessage{value: 1000}(message);
+    }
+
+    function test_SendCrossChainMessage_EmptyPayload() public {
+        ICrossChainMessenger.CrossChainMessage memory message = ICrossChainMessenger.CrossChainMessage({
+            targetChainId: ARBITRUM_DOMAIN,
+            targetVault: childVault,
+            messageType: ICrossChainMessenger.MessageType.DEPOSIT_REQUEST,
+            payload: "",
+            nonce: 0,
+            timestamp: block.timestamp
+        });
+
+        vm.prank(messenger_role);
+        vm.expectRevert("Empty payload");
+        messenger.sendCrossChainMessage{value: 1000}(message);
+    }
+
+    // ===============================
+    // Message Handling Tests
+    // ===============================
+
+    function test_Handle_ValidMessage() public {
+        bytes memory messageBody = abi.encode(
+            ICrossChainMessenger.MessageType.DEPOSIT_CONFIRMATION,
+            100e6,
+            childVault
+        );
+        
+        vm.expectEmit(true, true, true, false);
+        emit MessageReceived(bytes32(0), ARBITRUM_DOMAIN, ICrossChainMessenger.MessageType.DEPOSIT_CONFIRMATION);
+        
+        vm.prank(address(mailbox));
+        messenger.handle(ARBITRUM_DOMAIN, TRUSTED_SENDER, messageBody);
+    }
+
+    function test_Handle_OnlyMailbox() public {
+        bytes memory messageBody = abi.encode(
+            ICrossChainMessenger.MessageType.DEPOSIT_CONFIRMATION,
+            100e6,
+            childVault
+        );
+        
+        vm.prank(user);
+        vm.expectRevert("Only Hyperlane mailbox");
+        messenger.handle(ARBITRUM_DOMAIN, TRUSTED_SENDER, messageBody);
+    }
+
+    function test_Handle_UntrustedDomain() public {
+        bytes memory messageBody = abi.encode(
+            ICrossChainMessenger.MessageType.DEPOSIT_CONFIRMATION,
+            100e6,
+            childVault
+        );
+        
+        vm.prank(address(mailbox));
+        vm.expectRevert(abi.encodeWithSelector(CrossChainMessenger.UntrustedDomain.selector, UNTRUSTED_DOMAIN));
+        messenger.handle(UNTRUSTED_DOMAIN, TRUSTED_SENDER, messageBody);
+    }
+
+    function test_Handle_UntrustedSender() public {
+        bytes memory messageBody = abi.encode(
+            ICrossChainMessenger.MessageType.DEPOSIT_CONFIRMATION,
+            100e6,
+            childVault
+        );
+        
+        vm.prank(address(mailbox));
+        vm.expectRevert(abi.encodeWithSelector(CrossChainMessenger.UntrustedSender.selector, UNTRUSTED_SENDER));
+        messenger.handle(ARBITRUM_DOMAIN, UNTRUSTED_SENDER, messageBody);
+    }
+
+    function test_Handle_InvalidMessageFormat() public {
+        bytes memory invalidMessage = abi.encode("invalid", "format");
+        
+        vm.prank(address(mailbox));
+        vm.expectRevert();
+        messenger.handle(ARBITRUM_DOMAIN, TRUSTED_SENDER, invalidMessage);
+    }
+
+    function test_Handle_WhenPaused() public {
+        vm.prank(pauser);
+        messenger.pause();
+        
+        bytes memory messageBody = abi.encode(
+            ICrossChainMessenger.MessageType.DEPOSIT_CONFIRMATION,
+            100e6,
+            childVault
+        );
+        
+        vm.prank(address(mailbox));
+        vm.expectRevert("Pausable: paused");
+        messenger.handle(ARBITRUM_DOMAIN, TRUSTED_SENDER, messageBody);
+    }
+
+    // ===============================
+    // Message Types Tests
+    // ===============================
+
+    function test_Handle_DepositRequest() public {
+        bytes memory messageBody = abi.encode(
+            ICrossChainMessenger.MessageType.DEPOSIT_REQUEST,
+            500e6,
+            childVault
+        );
+        
+        vm.prank(address(mailbox));
+        messenger.handle(ARBITRUM_DOMAIN, TRUSTED_SENDER, messageBody);
+    }
+
+    function test_Handle_WithdrawalRequest() public {
+        bytes memory messageBody = abi.encode(
+            ICrossChainMessenger.MessageType.WITHDRAWAL_REQUEST,
+            200e6,
+            childVault
+        );
+        
+        vm.prank(address(mailbox));
+        messenger.handle(ARBITRUM_DOMAIN, TRUSTED_SENDER, messageBody);
+    }
+
+    function test_Handle_YieldReport() public {
+        bytes memory messageBody = abi.encode(
+            ICrossChainMessenger.MessageType.YIELD_REPORT,
+            500, // 5% APY
+            1000e6 // total value
+        );
+        
+        vm.prank(address(mailbox));
+        messenger.handle(ARBITRUM_DOMAIN, TRUSTED_SENDER, messageBody);
+    }
+
+    function test_Handle_RebalanceRequest() public {
+        bytes memory messageBody = abi.encode(
+            ICrossChainMessenger.MessageType.REBALANCE_REQUEST,
+            300e6,
+            OPTIMISM_DOMAIN // target domain
+        );
+        
+        vm.prank(address(mailbox));
+        messenger.handle(ARBITRUM_DOMAIN, TRUSTED_SENDER, messageBody);
+    }
+
+    // ===============================
+    // Retry Mechanism Tests
+    // ===============================
+
+    function test_RetryFailedMessage_NotFailed() public {
+        bytes32 messageId = keccak256("test message");
+        
+        vm.prank(retrier);
+        vm.expectRevert(abi.encodeWithSelector(CrossChainMessenger.MessageNotFailed.selector, messageId));
+        messenger.retryFailedMessage(messageId);
+    }
+
+    function test_RetryFailedMessage_OnlyRetrier() public {
+        bytes32 messageId = keccak256("test message");
+        
+        vm.prank(user);
+        vm.expectRevert();
+        messenger.retryFailedMessage(messageId);
+    }
+
+    function test_GetFailedMessagesForUser() public {
+        bytes32[] memory failedMessages = messenger.getFailedMessagesForUser(user);
+        assertEq(failedMessages.length, 0);
+    }
+
+    function test_GetMessageStatus_ProcessedMessage() public {
+        bytes32 messageId = keccak256("processed message");
+        
+        // Mark message as processed (would happen during normal flow)
+        vm.store(address(messenger), keccak256(abi.encode(messageId, uint256(44))), bytes32(uint256(1)));
+        
+        (bool processed, bool success) = messenger.getMessageStatus(messageId);
+        assertTrue(processed);
+    }
+
+    function test_GetMessageStatus_UnprocessedMessage() public {
+        bytes32 messageId = keccak256("unprocessed message");
+        
+        (bool processed, bool success) = messenger.getMessageStatus(messageId);
+        assertFalse(processed);
+        assertFalse(success);
+    }
+
+    // ===============================
+    // Fee Estimation Tests
+    // ===============================
+
+    function test_EstimateMessageFee() public {
+        uint256 fee = messenger.estimateMessageFee(ARBITRUM_DOMAIN);
+        assertEq(fee, 0); // MockInterchainGasPaymaster returns 0
+    }
+
+    function test_Fee() public {
+        bytes memory message = abi.encode("test message");
+        uint256 fee = messenger.fee(ARBITRUM_DOMAIN, message);
+        assertEq(fee, 0); // MockInterchainGasPaymaster returns 0
+    }
+
+    // ===============================
+    // Getter Functions Tests
+    // ===============================
+
+    function test_GetHyperlaneMailbox() public {
+        assertEq(messenger.getHyperlaneMailbox(), address(mailbox));
+    }
+
+    function test_GetCCTPTokenMessenger() public {
+        assertEq(messenger.getCCTPTokenMessenger(), address(tokenMessenger));
+    }
+
+    function test_GetInterchainGasPaymaster() public {
+        assertEq(messenger.getInterchainGasPaymaster(), address(gasPaymaster));
+    }
+
+    // ===============================
+    // Pausable Tests
+    // ===============================
+
+    function test_Pause() public {
+        vm.prank(pauser);
+        messenger.pause();
+        
+        assertTrue(messenger.paused());
+    }
+
+    function test_Unpause() public {
+        vm.prank(pauser);
+        messenger.pause();
+        
+        vm.prank(pauser);
+        messenger.unpause();
+        
+        assertFalse(messenger.paused());
+    }
+
+    function test_Pause_OnlyPauser() public {
+        vm.prank(user);
+        vm.expectRevert();
+        messenger.pause();
+    }
+
+    // ===============================
+    // Access Control Tests
+    // ===============================
+
+    function test_GrantMessengerRole() public {
+        address newMessenger = address(0x999);
+        
+        vm.prank(admin);
+        messenger.grantRole(messenger.MESSENGER_ROLE(), newMessenger);
+        
+        assertTrue(messenger.hasRole(messenger.MESSENGER_ROLE(), newMessenger));
+    }
+
+    function test_RevokeMessengerRole() public {
+        vm.prank(admin);
+        messenger.revokeRole(messenger.MESSENGER_ROLE(), messenger_role);
+        
+        assertFalse(messenger.hasRole(messenger.MESSENGER_ROLE(), messenger_role));
+    }
+
+    // ===============================
+    // Complex Scenarios
+    // ===============================
+
+    function test_MultipleMessageTypes_SameSender() public {
+        // Send deposit request
+        bytes memory depositMessage = abi.encode(
+            ICrossChainMessenger.MessageType.DEPOSIT_REQUEST,
+            100e6,
+            childVault
+        );
+        
+        vm.prank(address(mailbox));
+        messenger.handle(ARBITRUM_DOMAIN, TRUSTED_SENDER, depositMessage);
+        
+        // Send yield report from same sender
+        bytes memory yieldMessage = abi.encode(
+            ICrossChainMessenger.MessageType.YIELD_REPORT,
+            450, // 4.5% APY
+            1100e6 // total value
+        );
+        
+        vm.prank(address(mailbox));
+        messenger.handle(ARBITRUM_DOMAIN, TRUSTED_SENDER, yieldMessage);
+        
+        // Send withdrawal request
+        bytes memory withdrawMessage = abi.encode(
+            ICrossChainMessenger.MessageType.WITHDRAWAL_REQUEST,
+            50e6,
+            childVault
+        );
+        
+        vm.prank(address(mailbox));
+        messenger.handle(ARBITRUM_DOMAIN, TRUSTED_SENDER, withdrawMessage);
+    }
+
+    function test_MessageFromMultipleDomains() public {
+        bytes memory messageBody = abi.encode(
+            ICrossChainMessenger.MessageType.YIELD_REPORT,
+            600, // 6% APY
+            1000e6
+        );
+        
+        // Message from Arbitrum
+        vm.prank(address(mailbox));
+        messenger.handle(ARBITRUM_DOMAIN, TRUSTED_SENDER, messageBody);
+        
+        // Message from Optimism
+        vm.prank(address(mailbox));
+        messenger.handle(OPTIMISM_DOMAIN, TRUSTED_SENDER, messageBody);
+    }
+
+    // ===============================
+    // Edge Cases and Boundary Tests
+    // ===============================
+
+    function testFuzz_SendMessage_ValidDomains(uint32 domain) public {
+        // Only test with trusted domains
+        vm.assume(domain == ARBITRUM_DOMAIN || domain == OPTIMISM_DOMAIN);
+        
+        ICrossChainMessenger.CrossChainMessage memory message = ICrossChainMessenger.CrossChainMessage({
+            targetChainId: domain,
+            targetVault: childVault,
+            messageType: ICrossChainMessenger.MessageType.DEPOSIT_REQUEST,
+            payload: abi.encode(100e6),
+            nonce: 0,
+            timestamp: block.timestamp
+        });
+
+        vm.prank(messenger_role);
+        bytes32 messageId = messenger.sendCrossChainMessage{value: 1000}(message);
+        assertTrue(messageId != bytes32(0));
+    }
+
+    function testFuzz_Handle_ValidAmounts(uint256 amount) public {
+        amount = bound(amount, 1, type(uint128).max);
+        
+        bytes memory messageBody = abi.encode(
+            ICrossChainMessenger.MessageType.DEPOSIT_REQUEST,
+            amount,
+            childVault
+        );
+        
+        vm.prank(address(mailbox));
+        messenger.handle(ARBITRUM_DOMAIN, TRUSTED_SENDER, messageBody);
+    }
+
+    function test_MessageNonceIncrementation() public {
+        ICrossChainMessenger.CrossChainMessage memory message1 = ICrossChainMessenger.CrossChainMessage({
+            targetChainId: ARBITRUM_DOMAIN,
+            targetVault: childVault,
+            messageType: ICrossChainMessenger.MessageType.DEPOSIT_REQUEST,
+            payload: abi.encode(100e6),
+            nonce: 0,
+            timestamp: block.timestamp
+        });
+        
+        ICrossChainMessenger.CrossChainMessage memory message2 = ICrossChainMessenger.CrossChainMessage({
+            targetChainId: ARBITRUM_DOMAIN,
+            targetVault: childVault,
+            messageType: ICrossChainMessenger.MessageType.DEPOSIT_REQUEST,
+            payload: abi.encode(200e6),
+            nonce: 0,
+            timestamp: block.timestamp
+        });
+
+        vm.startPrank(messenger_role);
+        bytes32 messageId1 = messenger.sendCrossChainMessage{value: 1000}(message1);
+        bytes32 messageId2 = messenger.sendCrossChainMessage{value: 1000}(message2);
+        vm.stopPrank();
+        
+        assertTrue(messageId1 != messageId2);
+    }
+
+    function test_LargePayload() public {
+        bytes memory largePayload = new bytes(1024); // 1KB payload
+        for (uint i = 0; i < 1024; i++) {
+            largePayload[i] = bytes1(uint8(i % 256));
+        }
+        
+        ICrossChainMessenger.CrossChainMessage memory message = ICrossChainMessenger.CrossChainMessage({
+            targetChainId: ARBITRUM_DOMAIN,
+            targetVault: childVault,
+            messageType: ICrossChainMessenger.MessageType.DEPOSIT_REQUEST,
+            payload: largePayload,
+            nonce: 0,
+            timestamp: block.timestamp
+        });
+
+        vm.prank(messenger_role);
+        bytes32 messageId = messenger.sendCrossChainMessage{value: 1000}(message);
+        assertTrue(messageId != bytes32(0));
+    }
+}

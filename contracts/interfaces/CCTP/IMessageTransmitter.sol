@@ -13,10 +13,7 @@ interface IMessageTransmitter {
      * @param attestation The attestation signature from Circle's attestation service
      * @return success Whether the message was successfully processed
      */
-    function receiveMessage(
-        bytes calldata message,
-        bytes calldata attestation
-    ) external returns (bool success);
+    function receiveMessage(bytes calldata message, bytes calldata attestation) external returns (bool success);
 
     /**
      * @notice Check if a message has been received
@@ -49,17 +46,12 @@ interface IMessageTransmitter {
         bytes calldata originalAttestation,
         bytes calldata newMessageBody,
         bytes32 newDestinationCaller
-    ) external;
+    )
+        external;
 
     event MessageReceived(
-        address indexed caller,
-        uint32 sourceDomain,
-        uint64 indexed nonce,
-        bytes32 sender,
-        bytes messageBody
+        address indexed caller, uint32 sourceDomain, uint64 indexed nonce, bytes32 sender, bytes messageBody
     );
 
-    event MessageSent(
-        bytes message
-    );
+    event MessageSent(bytes message);
 }

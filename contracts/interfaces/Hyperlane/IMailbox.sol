@@ -18,17 +18,17 @@ interface IMailbox {
         uint32 destinationDomain,
         bytes32 recipientAddress,
         bytes calldata messageBody
-    ) external payable returns (bytes32 messageId);
+    )
+        external
+        payable
+        returns (bytes32 messageId);
 
     /**
      * @notice Process an incoming message from another chain
      * @param metadata Message metadata including origin info
      * @param message The message body
      */
-    function process(
-        bytes calldata metadata,
-        bytes calldata message
-    ) external;
+    function process(bytes calldata metadata, bytes calldata message) external;
 
     /**
      * @notice Get the local domain ID
@@ -66,22 +66,14 @@ interface IMailbox {
         uint32 destinationDomain,
         bytes32 recipientAddress,
         bytes calldata messageBody
-    ) external view returns (uint256);
+    )
+        external
+        view
+        returns (uint256);
 
-    event Dispatch(
-        address indexed sender,
-        uint32 indexed destination,
-        bytes32 indexed recipient,
-        bytes message
-    );
+    event Dispatch(address indexed sender, uint32 indexed destination, bytes32 indexed recipient, bytes message);
 
-    event ProcessId(
-        bytes32 indexed messageId
-    );
+    event ProcessId(bytes32 indexed messageId);
 
-    event Process(
-        uint32 indexed origin,
-        bytes32 indexed sender,
-        address indexed recipient
-    );
+    event Process(uint32 indexed origin, bytes32 indexed sender, address indexed recipient);
 }

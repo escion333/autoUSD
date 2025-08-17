@@ -1,0 +1,609 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.23;
+
+import {Test, console2} from "forge-std/Test.sol";
+import {HealthMonitor} from "../../../contracts/core/HealthMonitor.sol";
+import {IHealthMonitor} from "../../../contracts/interfaces/IHealthMonitor.sol";
+import {MockMotherVault} from "../../mocks/MockMotherVault.sol";
+import {MockCrossChainMessenger} from "../../mocks/MockCrossChainMessenger.sol";
+import {MockERC20} from "../../mocks/MockERC20.sol";
+
+/**
+ * @title HealthMonitorExtendedTest
+ * @notice Extended test suite for HealthMonitor covering edge cases and complex scenarios
+ */
+contract HealthMonitorExtendedTest is Test {
+    HealthMonitor public healthMonitor;
+    MockMotherVault public motherVault;
+    MockCrossChainMessenger public messenger;
+    MockERC20 public usdc;
+    
+    address public admin = address(0x1);
+    address public operator = address(0x2);
+    address public user = address(0x3);
+    address public pauser = address(0x4);
+    address public monitor = address(0x5);
+    
+    uint32 public constant BASE_DOMAIN = 8453;
+    uint32 public constant ARBITRUM_DOMAIN = 42161;
+    uint32 public constant OPTIMISM_DOMAIN = 10;
+    uint32 public constant POLYGON_DOMAIN = 137;
+    
+    // Events from the actual interface
+    event HealthCheckCompleted(uint256 indexed timestamp, bool indexed systemHealthy, string status);
+    event VaultHealthUpdated(uint32 indexed domainId, bool indexed isHealthy, string status);
+    event FailedOperationRecorded(string indexed operationType, address indexed contractAddress, string errorMessage);
+    event SystemMetricsUpdated(uint256 indexed totalTVL, uint256 indexed activeVaults, bool indexed emergencyMode);
+    event ContractsUpdated(address indexed motherVault, address indexed crossChainMessenger, address indexed rebalancer);
+    
+    function setUp() public {
+        usdc = new MockERC20("USD Coin", "USDC", 6);
+        motherVault = new MockMotherVault(address(usdc));
+        messenger = new MockCrossChainMessenger();
+        
+        healthMonitor = new HealthMonitor(address(motherVault), address(messenger), address(0), admin);
+        
+        // Fund test accounts
+        usdc.mint(address(motherVault), 10_000_000e6);
+        deal(admin, 10 ether);
+        deal(operator, 10 ether);
+    }
+
+    // ===============================
+    // Constructor and Configuration Tests
+    // ===============================
+
+    function test_Constructor_InvalidAddresses() public {
+        vm.expectRevert("Invalid mother vault");
+        new HealthMonitor(address(0), address(messenger), admin);
+        
+        vm.expectRevert("Invalid messenger");
+        new HealthMonitor(address(motherVault), address(0), admin);
+        
+        vm.expectRevert("Invalid admin");
+        new HealthMonitor(address(motherVault), address(messenger), address(0));
+    }
+
+    function test_Constructor_InitialState() public {
+        assertEq(address(healthMonitor.motherVault()), address(motherVault));
+        assertEq(address(healthMonitor.crossChainMessenger()), address(messenger));
+        assertTrue(healthMonitor.hasRole(healthMonitor.DEFAULT_ADMIN_ROLE(), admin));
+        assertTrue(healthMonitor.hasRole(healthMonitor.OPERATOR_ROLE(), admin));
+        assertTrue(healthMonitor.hasRole(healthMonitor.MONITOR_ROLE(), admin));
+        
+        // Check default thresholds
+        assertEq(healthMonitor.getHealthThreshold(IHealthMonitor.HealthMetric.RESPONSE_TIME), 30000); // 30s
+        assertEq(healthMonitor.getHealthThreshold(IHealthMonitor.HealthMetric.APY_DEVIATION), 1000); // 10%
+        assertEq(healthMonitor.getHealthThreshold(IHealthMonitor.HealthMetric.ERROR_RATE), 500); // 5%
+        assertEq(healthMonitor.getHealthThreshold(IHealthMonitor.HealthMetric.BRIDGE_DELAY), 3600000); // 1 hour
+    }
+
+    function test_SetHealthThreshold_ResponseTime() public {
+        uint256 newThreshold = 60000; // 60 seconds
+        
+        vm.expectEmit(true, true, true, true);
+        emit HealthThresholdUpdated(
+            IHealthMonitor.HealthMetric.RESPONSE_TIME, 
+            healthMonitor.getHealthThreshold(IHealthMonitor.HealthMetric.RESPONSE_TIME),
+            newThreshold
+        );
+        
+        vm.prank(admin);
+        healthMonitor.setHealthThreshold(IHealthMonitor.HealthMetric.RESPONSE_TIME, newThreshold);
+        
+        assertEq(healthMonitor.getHealthThreshold(IHealthMonitor.HealthMetric.RESPONSE_TIME), newThreshold);
+    }
+
+    function test_SetHealthThreshold_APYDeviation() public {
+        uint256 newThreshold = 1500; // 15%
+        
+        vm.prank(admin);
+        healthMonitor.setHealthThreshold(IHealthMonitor.HealthMetric.APY_DEVIATION, newThreshold);
+        
+        assertEq(healthMonitor.getHealthThreshold(IHealthMonitor.HealthMetric.APY_DEVIATION), newThreshold);
+    }
+
+    function test_SetHealthThreshold_OnlyAdmin() public {
+        vm.prank(user);
+        vm.expectRevert();
+        healthMonitor.setHealthThreshold(IHealthMonitor.HealthMetric.RESPONSE_TIME, 60000);
+    }
+
+    function test_SetHealthThreshold_InvalidValue() public {
+        vm.prank(admin);
+        vm.expectRevert("Invalid threshold value");
+        healthMonitor.setHealthThreshold(IHealthMonitor.HealthMetric.RESPONSE_TIME, 0);
+    }
+
+    function test_AddMonitoredChain() public {
+        vm.prank(admin);
+        healthMonitor.addMonitoredChain(POLYGON_DOMAIN);
+        
+        uint32[] memory chains = healthMonitor.getMonitoredChains();
+        bool found = false;
+        for (uint i = 0; i < chains.length; i++) {
+            if (chains[i] == POLYGON_DOMAIN) {
+                found = true;
+                break;
+            }
+        }
+        assertTrue(found);
+    }
+
+    function test_AddMonitoredChain_OnlyAdmin() public {
+        vm.prank(user);
+        vm.expectRevert();
+        healthMonitor.addMonitoredChain(POLYGON_DOMAIN);
+    }
+
+    function test_AddMonitoredChain_AlreadyExists() public {
+        vm.prank(admin);
+        healthMonitor.addMonitoredChain(POLYGON_DOMAIN);
+        
+        vm.prank(admin);
+        vm.expectRevert("Chain already monitored");
+        healthMonitor.addMonitoredChain(POLYGON_DOMAIN);
+    }
+
+    function test_RemoveMonitoredChain() public {
+        vm.prank(admin);
+        healthMonitor.addMonitoredChain(POLYGON_DOMAIN);
+        
+        vm.prank(admin);
+        healthMonitor.removeMonitoredChain(POLYGON_DOMAIN);
+        
+        uint32[] memory chains = healthMonitor.getMonitoredChains();
+        for (uint i = 0; i < chains.length; i++) {
+            assertTrue(chains[i] != POLYGON_DOMAIN);
+        }
+    }
+
+    function test_RemoveMonitoredChain_OnlyAdmin() public {
+        vm.prank(user);
+        vm.expectRevert();
+        healthMonitor.removeMonitoredChain(ARBITRUM_DOMAIN);
+    }
+
+    function test_RemoveMonitoredChain_NotMonitored() public {
+        vm.prank(admin);
+        vm.expectRevert("Chain not monitored");
+        healthMonitor.removeMonitoredChain(POLYGON_DOMAIN);
+    }
+
+    // ===============================
+    // Health Check Tests
+    // ===============================
+
+    function test_PerformHealthCheck_Healthy() public {
+        vm.expectEmit(true, true, true, true);
+        emit HealthCheckPerformed(ARBITRUM_DOMAIN, IHealthMonitor.HealthStatus.HEALTHY, block.timestamp, monitor);
+        
+        vm.prank(monitor);
+        healthMonitor.performHealthCheck(ARBITRUM_DOMAIN);
+        
+        IHealthMonitor.ChainHealth memory health = healthMonitor.getChainHealth(ARBITRUM_DOMAIN);
+        assertEq(uint8(health.status), uint8(IHealthMonitor.HealthStatus.HEALTHY));
+        assertEq(health.lastUpdate, block.timestamp);
+    }
+
+    function test_PerformHealthCheck_OnlyMonitor() public {
+        vm.prank(user);
+        vm.expectRevert();
+        healthMonitor.performHealthCheck(ARBITRUM_DOMAIN);
+    }
+
+    function test_PerformHealthCheck_WhenPaused() public {
+        vm.prank(pauser);
+        healthMonitor.pause();
+        
+        vm.prank(monitor);
+        vm.expectRevert("Pausable: paused");
+        healthMonitor.performHealthCheck(ARBITRUM_DOMAIN);
+    }
+
+    function test_ReportHealthMetric_ResponseTime() public {
+        uint256 responseTime = 25000; // 25 seconds (under 30s threshold)
+        
+        vm.expectEmit(true, true, true, true);
+        emit HealthMetricReported(ARBITRUM_DOMAIN, IHealthMonitor.HealthMetric.RESPONSE_TIME, responseTime, block.timestamp);
+        
+        vm.prank(monitor);
+        healthMonitor.reportHealthMetric(ARBITRUM_DOMAIN, IHealthMonitor.HealthMetric.RESPONSE_TIME, responseTime);
+        
+        // Should remain healthy
+        IHealthMonitor.ChainHealth memory health = healthMonitor.getChainHealth(ARBITRUM_DOMAIN);
+        assertEq(uint8(health.status), uint8(IHealthMonitor.HealthStatus.HEALTHY));
+    }
+
+    function test_ReportHealthMetric_ResponseTime_Degraded() public {
+        uint256 responseTime = 35000; // 35 seconds (over 30s threshold)
+        
+        vm.expectEmit(true, true, true, true);
+        emit ChainHealthDegraded(ARBITRUM_DOMAIN, IHealthMonitor.HealthStatus.DEGRADED, "Response time threshold exceeded", block.timestamp);
+        
+        vm.prank(monitor);
+        healthMonitor.reportHealthMetric(ARBITRUM_DOMAIN, IHealthMonitor.HealthMetric.RESPONSE_TIME, responseTime);
+        
+        IHealthMonitor.ChainHealth memory health = healthMonitor.getChainHealth(ARBITRUM_DOMAIN);
+        assertEq(uint8(health.status), uint8(IHealthMonitor.HealthStatus.DEGRADED));
+    }
+
+    function test_ReportHealthMetric_ErrorRate_Critical() public {
+        uint256 errorRate = 2000; // 20% (over 5% threshold, critical level)
+        
+        vm.expectEmit(true, true, true, true);
+        emit EmergencyPauseTriggered(ARBITRUM_DOMAIN, IHealthMonitor.HealthStatus.CRITICAL, block.timestamp);
+        
+        vm.prank(monitor);
+        healthMonitor.reportHealthMetric(ARBITRUM_DOMAIN, IHealthMonitor.HealthMetric.ERROR_RATE, errorRate);
+        
+        IHealthMonitor.ChainHealth memory health = healthMonitor.getChainHealth(ARBITRUM_DOMAIN);
+        assertEq(uint8(health.status), uint8(IHealthMonitor.HealthStatus.CRITICAL));
+    }
+
+    function test_ReportHealthMetric_APYDeviation() public {
+        uint256 apyDeviation = 800; // 8% (under 10% threshold)
+        
+        vm.prank(monitor);
+        healthMonitor.reportHealthMetric(ARBITRUM_DOMAIN, IHealthMonitor.HealthMetric.APY_DEVIATION, apyDeviation);
+        
+        IHealthMonitor.ChainHealth memory health = healthMonitor.getChainHealth(ARBITRUM_DOMAIN);
+        assertEq(uint8(health.status), uint8(IHealthMonitor.HealthStatus.HEALTHY));
+    }
+
+    function test_ReportHealthMetric_BridgeDelay_Degraded() public {
+        uint256 bridgeDelay = 4200000; // 70 minutes (over 1 hour threshold)
+        
+        vm.expectEmit(true, true, true, true);
+        emit ChainHealthDegraded(ARBITRUM_DOMAIN, IHealthMonitor.HealthStatus.DEGRADED, "Bridge delay threshold exceeded", block.timestamp);
+        
+        vm.prank(monitor);
+        healthMonitor.reportHealthMetric(ARBITRUM_DOMAIN, IHealthMonitor.HealthMetric.BRIDGE_DELAY, bridgeDelay);
+        
+        IHealthMonitor.ChainHealth memory health = healthMonitor.getChainHealth(ARBITRUM_DOMAIN);
+        assertEq(uint8(health.status), uint8(IHealthMonitor.HealthStatus.DEGRADED));
+    }
+
+    function test_ReportHealthMetric_OnlyMonitor() public {
+        vm.prank(user);
+        vm.expectRevert();
+        healthMonitor.reportHealthMetric(ARBITRUM_DOMAIN, IHealthMonitor.HealthMetric.RESPONSE_TIME, 25000);
+    }
+
+    // ===============================
+    // Chain Status Management Tests
+    // ===============================
+
+    function test_SetChainStatus_ManuallyDegraded() public {
+        string memory reason = "Manual intervention for maintenance";
+        
+        vm.expectEmit(true, true, true, true);
+        emit ChainHealthDegraded(ARBITRUM_DOMAIN, IHealthMonitor.HealthStatus.DEGRADED, reason, block.timestamp);
+        
+        vm.prank(operator);
+        healthMonitor.setChainStatus(ARBITRUM_DOMAIN, IHealthMonitor.HealthStatus.DEGRADED, reason);
+        
+        IHealthMonitor.ChainHealth memory health = healthMonitor.getChainHealth(ARBITRUM_DOMAIN);
+        assertEq(uint8(health.status), uint8(IHealthMonitor.HealthStatus.DEGRADED));
+    }
+
+    function test_SetChainStatus_Recovery() public {
+        // First set to degraded
+        vm.prank(operator);
+        healthMonitor.setChainStatus(ARBITRUM_DOMAIN, IHealthMonitor.HealthStatus.DEGRADED, "Test degradation");
+        
+        // Then recover
+        vm.expectEmit(true, true, false, true);
+        emit ChainHealthRecovered(ARBITRUM_DOMAIN, block.timestamp);
+        
+        vm.prank(operator);
+        healthMonitor.setChainStatus(ARBITRUM_DOMAIN, IHealthMonitor.HealthStatus.HEALTHY, "");
+        
+        IHealthMonitor.ChainHealth memory health = healthMonitor.getChainHealth(ARBITRUM_DOMAIN);
+        assertEq(uint8(health.status), uint8(IHealthMonitor.HealthStatus.HEALTHY));
+    }
+
+    function test_SetChainStatus_OnlyOperator() public {
+        vm.prank(user);
+        vm.expectRevert();
+        healthMonitor.setChainStatus(ARBITRUM_DOMAIN, IHealthMonitor.HealthStatus.DEGRADED, "test");
+    }
+
+    function test_SetChainStatus_InvalidReason() public {
+        vm.prank(operator);
+        vm.expectRevert("Reason required for non-healthy status");
+        healthMonitor.setChainStatus(ARBITRUM_DOMAIN, IHealthMonitor.HealthStatus.DEGRADED, "");
+    }
+
+    // ===============================
+    // Emergency Functions Tests
+    // ===============================
+
+    function test_TriggerEmergencyPause() public {
+        string memory reason = "Critical system failure detected";
+        
+        vm.expectEmit(true, true, true, true);
+        emit EmergencyPauseTriggered(ARBITRUM_DOMAIN, IHealthMonitor.HealthStatus.CRITICAL, block.timestamp);
+        
+        vm.prank(operator);
+        healthMonitor.triggerEmergencyPause(ARBITRUM_DOMAIN, reason);
+        
+        IHealthMonitor.ChainHealth memory health = healthMonitor.getChainHealth(ARBITRUM_DOMAIN);
+        assertEq(uint8(health.status), uint8(IHealthMonitor.HealthStatus.CRITICAL));
+    }
+
+    function test_TriggerEmergencyPause_OnlyOperator() public {
+        vm.prank(user);
+        vm.expectRevert();
+        healthMonitor.triggerEmergencyPause(ARBITRUM_DOMAIN, "test reason");
+    }
+
+    function test_TriggerEmergencyPause_EmptyReason() public {
+        vm.prank(operator);
+        vm.expectRevert("Emergency reason required");
+        healthMonitor.triggerEmergencyPause(ARBITRUM_DOMAIN, "");
+    }
+
+    function test_ResetChainHealth() public {
+        // First degrade the chain
+        vm.prank(operator);
+        healthMonitor.setChainStatus(ARBITRUM_DOMAIN, IHealthMonitor.HealthStatus.DEGRADED, "Test degradation");
+        
+        // Reset health
+        vm.expectEmit(true, true, false, true);
+        emit ChainHealthRecovered(ARBITRUM_DOMAIN, block.timestamp);
+        
+        vm.prank(operator);
+        healthMonitor.resetChainHealth(ARBITRUM_DOMAIN);
+        
+        IHealthMonitor.ChainHealth memory health = healthMonitor.getChainHealth(ARBITRUM_DOMAIN);
+        assertEq(uint8(health.status), uint8(IHealthMonitor.HealthStatus.HEALTHY));
+        assertEq(health.lastUpdate, block.timestamp);
+    }
+
+    function test_ResetChainHealth_OnlyOperator() public {
+        vm.prank(user);
+        vm.expectRevert();
+        healthMonitor.resetChainHealth(ARBITRUM_DOMAIN);
+    }
+
+    // ===============================
+    // Getter Functions Tests
+    // ===============================
+
+    function test_GetChainHealth_NonExistent() public {
+        IHealthMonitor.ChainHealth memory health = healthMonitor.getChainHealth(POLYGON_DOMAIN);
+        assertEq(uint8(health.status), uint8(IHealthMonitor.HealthStatus.HEALTHY));
+        assertEq(health.lastUpdate, 0);
+        assertEq(health.consecutiveFailures, 0);
+    }
+
+    function test_GetMonitoredChains() public {
+        uint32[] memory chains = healthMonitor.getMonitoredChains();
+        
+        // Should have Base, Arbitrum, and Optimism by default
+        assertEq(chains.length, 3);
+        
+        bool hasBase = false;
+        bool hasArbitrum = false;
+        bool hasOptimism = false;
+        
+        for (uint i = 0; i < chains.length; i++) {
+            if (chains[i] == BASE_DOMAIN) hasBase = true;
+            if (chains[i] == ARBITRUM_DOMAIN) hasArbitrum = true;
+            if (chains[i] == OPTIMISM_DOMAIN) hasOptimism = true;
+        }
+        
+        assertTrue(hasBase);
+        assertTrue(hasArbitrum);
+        assertTrue(hasOptimism);
+    }
+
+    function test_IsChainHealthy() public {
+        assertTrue(healthMonitor.isChainHealthy(ARBITRUM_DOMAIN));
+        
+        // Degrade chain
+        vm.prank(operator);
+        healthMonitor.setChainStatus(ARBITRUM_DOMAIN, IHealthMonitor.HealthStatus.DEGRADED, "Test");
+        
+        assertFalse(healthMonitor.isChainHealthy(ARBITRUM_DOMAIN));
+    }
+
+    function test_GetHealthSummary() public {
+        IHealthMonitor.HealthSummary memory summary = healthMonitor.getHealthSummary();
+        
+        assertEq(summary.totalChains, 3); // Base, Arbitrum, Optimism
+        assertEq(summary.healthyChains, 3);
+        assertEq(summary.degradedChains, 0);
+        assertEq(summary.criticalChains, 0);
+        
+        // Degrade one chain
+        vm.prank(operator);
+        healthMonitor.setChainStatus(ARBITRUM_DOMAIN, IHealthMonitor.HealthStatus.DEGRADED, "Test");
+        
+        summary = healthMonitor.getHealthSummary();
+        assertEq(summary.healthyChains, 2);
+        assertEq(summary.degradedChains, 1);
+        assertEq(summary.criticalChains, 0);
+    }
+
+    // ===============================
+    // Pausable Tests
+    // ===============================
+
+    function test_Pause() public {
+        vm.prank(pauser);
+        healthMonitor.pause();
+        
+        assertTrue(healthMonitor.paused());
+    }
+
+    function test_Unpause() public {
+        vm.prank(pauser);
+        healthMonitor.pause();
+        
+        vm.prank(pauser);
+        healthMonitor.unpause();
+        
+        assertFalse(healthMonitor.paused());
+    }
+
+    function test_Pause_OnlyPauser() public {
+        vm.prank(user);
+        vm.expectRevert();
+        healthMonitor.pause();
+    }
+
+    // ===============================
+    // Access Control Tests
+    // ===============================
+
+    function test_GrantMonitorRole() public {
+        address newMonitor = address(0x999);
+        
+        vm.prank(admin);
+        healthMonitor.grantRole(healthMonitor.MONITOR_ROLE(), newMonitor);
+        
+        assertTrue(healthMonitor.hasRole(healthMonitor.MONITOR_ROLE(), newMonitor));
+    }
+
+    function test_RevokeMonitorRole() public {
+        vm.prank(admin);
+        healthMonitor.revokeRole(healthMonitor.MONITOR_ROLE(), monitor);
+        
+        assertFalse(healthMonitor.hasRole(healthMonitor.MONITOR_ROLE(), monitor));
+    }
+
+    // ===============================
+    // Complex Scenarios Tests
+    // ===============================
+
+    function test_MultipleDegradations() public {
+        // Degrade multiple chains
+        vm.prank(operator);
+        healthMonitor.setChainStatus(ARBITRUM_DOMAIN, IHealthMonitor.HealthStatus.DEGRADED, "High latency");
+        
+        vm.prank(operator);
+        healthMonitor.setChainStatus(OPTIMISM_DOMAIN, IHealthMonitor.HealthStatus.CRITICAL, "Bridge failure");
+        
+        IHealthMonitor.HealthSummary memory summary = healthMonitor.getHealthSummary();
+        assertEq(summary.healthyChains, 1); // Only Base
+        assertEq(summary.degradedChains, 1); // Arbitrum
+        assertEq(summary.criticalChains, 1); // Optimism
+    }
+
+    function test_HealthMetricProgression() public {
+        // Start with healthy response time
+        vm.prank(monitor);
+        healthMonitor.reportHealthMetric(ARBITRUM_DOMAIN, IHealthMonitor.HealthMetric.RESPONSE_TIME, 25000);
+        
+        assertTrue(healthMonitor.isChainHealthy(ARBITRUM_DOMAIN));
+        
+        // Degrade response time
+        vm.prank(monitor);
+        healthMonitor.reportHealthMetric(ARBITRUM_DOMAIN, IHealthMonitor.HealthMetric.RESPONSE_TIME, 35000);
+        
+        assertFalse(healthMonitor.isChainHealthy(ARBITRUM_DOMAIN));
+        
+        // Recover response time
+        vm.prank(monitor);
+        healthMonitor.reportHealthMetric(ARBITRUM_DOMAIN, IHealthMonitor.HealthMetric.RESPONSE_TIME, 20000);
+        
+        assertTrue(healthMonitor.isChainHealthy(ARBITRUM_DOMAIN));
+    }
+
+    function test_ConsecutiveFailures() public {
+        // Multiple health checks that should increase consecutive failures
+        for (uint i = 0; i < 3; i++) {
+            vm.prank(monitor);
+            healthMonitor.reportHealthMetric(ARBITRUM_DOMAIN, IHealthMonitor.HealthMetric.ERROR_RATE, 1000); // 10% error rate
+        }
+        
+        IHealthMonitor.ChainHealth memory health = healthMonitor.getChainHealth(ARBITRUM_DOMAIN);
+        assertTrue(health.consecutiveFailures > 0);
+    }
+
+    // ===============================
+    // Edge Cases and Fuzz Tests
+    // ===============================
+
+    function testFuzz_HealthThresholds(uint256 threshold) public {
+        threshold = bound(threshold, 1, type(uint32).max);
+        
+        vm.prank(admin);
+        healthMonitor.setHealthThreshold(IHealthMonitor.HealthMetric.RESPONSE_TIME, threshold);
+        
+        assertEq(healthMonitor.getHealthThreshold(IHealthMonitor.HealthMetric.RESPONSE_TIME), threshold);
+    }
+
+    function testFuzz_HealthMetricValues(uint256 value) public {
+        value = bound(value, 0, type(uint32).max);
+        
+        vm.prank(monitor);
+        healthMonitor.reportHealthMetric(ARBITRUM_DOMAIN, IHealthMonitor.HealthMetric.RESPONSE_TIME, value);
+        
+        IHealthMonitor.ChainHealth memory health = healthMonitor.getChainHealth(ARBITRUM_DOMAIN);
+        
+        if (value > healthMonitor.getHealthThreshold(IHealthMonitor.HealthMetric.RESPONSE_TIME)) {
+            assertEq(uint8(health.status), uint8(IHealthMonitor.HealthStatus.DEGRADED));
+        } else {
+            assertEq(uint8(health.status), uint8(IHealthMonitor.HealthStatus.HEALTHY));
+        }
+    }
+
+    function test_ChainHealthHistory() public {
+        // Perform multiple health checks with different statuses
+        vm.prank(operator);
+        healthMonitor.setChainStatus(ARBITRUM_DOMAIN, IHealthMonitor.HealthStatus.DEGRADED, "Test 1");
+        
+        vm.warp(block.timestamp + 100);
+        
+        vm.prank(operator);
+        healthMonitor.setChainStatus(ARBITRUM_DOMAIN, IHealthMonitor.HealthStatus.CRITICAL, "Test 2");
+        
+        vm.warp(block.timestamp + 100);
+        
+        vm.prank(operator);
+        healthMonitor.resetChainHealth(ARBITRUM_DOMAIN);
+        
+        IHealthMonitor.ChainHealth memory health = healthMonitor.getChainHealth(ARBITRUM_DOMAIN);
+        assertEq(uint8(health.status), uint8(IHealthMonitor.HealthStatus.HEALTHY));
+        assertEq(health.lastUpdate, block.timestamp);
+    }
+
+    function test_AutoRecoveryAfterMetricImprovement() public {
+        // First degrade due to high error rate
+        vm.prank(monitor);
+        healthMonitor.reportHealthMetric(ARBITRUM_DOMAIN, IHealthMonitor.HealthMetric.ERROR_RATE, 1000); // 10% (over 5% threshold)
+        
+        assertFalse(healthMonitor.isChainHealthy(ARBITRUM_DOMAIN));
+        
+        // Report improved error rate
+        vm.prank(monitor);
+        healthMonitor.reportHealthMetric(ARBITRUM_DOMAIN, IHealthMonitor.HealthMetric.ERROR_RATE, 200); // 2% (under 5% threshold)
+        
+        assertTrue(healthMonitor.isChainHealthy(ARBITRUM_DOMAIN));
+    }
+
+    function test_CriticalStatusPrevention() public {
+        // Set chain to critical manually
+        vm.prank(operator);
+        healthMonitor.triggerEmergencyPause(ARBITRUM_DOMAIN, "Manual emergency test");
+        
+        IHealthMonitor.ChainHealth memory health = healthMonitor.getChainHealth(ARBITRUM_DOMAIN);
+        assertEq(uint8(health.status), uint8(IHealthMonitor.HealthStatus.CRITICAL));
+        
+        // Try to report good metrics - should remain critical until manually reset
+        vm.prank(monitor);
+        healthMonitor.reportHealthMetric(ARBITRUM_DOMAIN, IHealthMonitor.HealthMetric.RESPONSE_TIME, 1000);
+        
+        health = healthMonitor.getChainHealth(ARBITRUM_DOMAIN);
+        assertEq(uint8(health.status), uint8(IHealthMonitor.HealthStatus.CRITICAL));
+        
+        // Only manual reset should work
+        vm.prank(operator);
+        healthMonitor.resetChainHealth(ARBITRUM_DOMAIN);
+        
+        assertTrue(healthMonitor.isChainHealthy(ARBITRUM_DOMAIN));
+    }
+}

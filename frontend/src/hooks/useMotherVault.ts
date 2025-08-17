@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { UserPosition, VaultStats } from '@/types/contracts';
-import { MockMotherVault } from '@/lib/mocks/MockMotherVault';
-import { useCircleAuth } from './useCircleAuth';
+import { ReadOnlyMotherVault } from '@/lib/contracts/ReadOnlyMotherVault';
+import { CircleWalletVault } from '@/lib/contracts/CircleWalletVault';
+import { useAnvilAuth as useCircleAuth } from './useAnvilAuth';
 import { getUserFriendlyError } from '@/lib/utils/errors';
 
 export function useMotherVault() {
@@ -13,7 +14,8 @@ export function useMotherVault() {
   const [error, setError] = useState<Error | null>(null);
   const { user } = useCircleAuth();
 
-  const mockVault = MockMotherVault.getInstance();
+  const readOnlyVault = ReadOnlyMotherVault.getInstance();
+  const circleWallet = CircleWalletVault.getInstance();
 
   const fetchData = useCallback(async () => {
     if (!user?.walletAddress) {
@@ -28,10 +30,10 @@ export function useMotherVault() {
       setIsLoading(true);
       setError(null);
       
-      // Fetch user position and vault stats in parallel
+      // Fetch user position and vault stats in parallel using read-only vault
       const [position, stats] = await Promise.all([
-        mockVault.getUserPosition(user.walletAddress as `0x${string}`),
-        mockVault.getVaultStats()
+        readOnlyVault.getUserPosition(user.walletAddress as `0x${string}`),
+        readOnlyVault.getVaultStats()
       ]);
       
       setUserPosition(position);
@@ -56,9 +58,10 @@ export function useMotherVault() {
     }
     
     try {
-      // Convert amount to BigInt (assuming 6 decimals for USDC)
-      const amountBigInt = BigInt(Math.floor(amount * 1e6));
-      const txHash = await mockVault.deposit(amountBigInt, user.walletAddress as `0x${string}`);
+      // Use Circle wallet for gasless transactions
+      // For development: user?.walletId would come from Circle auth
+      const walletId = user?.walletId || 'mock-wallet-id';
+      const txHash = await circleWallet.deposit(amount, walletId);
       await fetchData(); // Refresh data after deposit
       return txHash;
     } catch (error) {
@@ -73,9 +76,10 @@ export function useMotherVault() {
     }
     
     try {
-      // Convert amount to BigInt (assuming 6 decimals for USDC)
-      const amountBigInt = BigInt(Math.floor(amount * 1e6));
-      const txHash = await mockVault.withdraw(amountBigInt, user.walletAddress as `0x${string}`, user.walletAddress as `0x${string}`);
+      // Use Circle wallet for gasless transactions
+      // For development: user?.walletId would come from Circle auth
+      const walletId = user?.walletId || 'mock-wallet-id';
+      const txHash = await circleWallet.withdraw(amount, walletId);
       await fetchData(); // Refresh data after withdrawal
       return txHash;
     } catch (err) {

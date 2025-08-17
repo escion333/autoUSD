@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
-import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
-import {IHealthMonitor} from "../interfaces/IHealthMonitor.sol";
-import {IMotherVault} from "../interfaces/IMotherVault.sol";
-import {ICrossChainMessenger} from "../interfaces/ICrossChainMessenger.sol";
-import {IRebalancer} from "../interfaces/IRebalancer.sol";
+import { AccessControl } from "@openzeppelin/contracts/access/AccessControl.sol";
+import { Pausable } from "@openzeppelin/contracts/utils/Pausable.sol";
+import { IHealthMonitor } from "../interfaces/IHealthMonitor.sol";
+import { IMotherVault } from "../interfaces/IMotherVault.sol";
+import { ICrossChainMessenger } from "../interfaces/ICrossChainMessenger.sol";
+import { IRebalancer } from "../interfaces/IRebalancer.sol";
 
 /**
  * @title HealthMonitor
@@ -33,12 +33,7 @@ contract HealthMonitor is IHealthMonitor, AccessControl, Pausable {
 
     // Events (defined in interface)
 
-    constructor(
-        address _motherVault,
-        address _crossChainMessenger,
-        address _rebalancer,
-        address _admin
-    ) {
+    constructor(address _motherVault, address _crossChainMessenger, address _rebalancer, address _admin) {
         require(_motherVault != address(0), "Invalid Mother Vault");
         require(_crossChainMessenger != address(0), "Invalid Cross Chain Messenger");
         require(_rebalancer != address(0), "Invalid Rebalancer");
@@ -116,7 +111,7 @@ contract HealthMonitor is IHealthMonitor, AccessControl, Pausable {
      */
     function getChildVaultHealth(uint32 domainId) external view override returns (VaultHealth memory vaultHealth) {
         vaultHealth = childVaultHealth[domainId];
-        
+
         // If no health data exists, try to get it from Mother Vault
         if (vaultHealth.lastUpdate == 0) {
             try motherVault.getChildVault(domainId) returns (IMotherVault.ChildVault memory childVault) {
@@ -125,25 +120,13 @@ contract HealthMonitor is IHealthMonitor, AccessControl, Pausable {
                         tvl: childVault.deployedAmount,
                         lastUpdate: childVault.lastReportTime,
                         isHealthy: block.timestamp - childVault.lastReportTime < STALE_DATA_THRESHOLD,
-                        status: block.timestamp - childVault.lastReportTime < STALE_DATA_THRESHOLD 
-                            ? "Active" 
-                            : "Stale data"
+                        status: block.timestamp - childVault.lastReportTime < STALE_DATA_THRESHOLD ? "Active" : "Stale data"
                     });
                 } else {
-                    vaultHealth = VaultHealth({
-                        tvl: 0,
-                        lastUpdate: 0,
-                        isHealthy: false,
-                        status: "Inactive vault"
-                    });
+                    vaultHealth = VaultHealth({ tvl: 0, lastUpdate: 0, isHealthy: false, status: "Inactive vault" });
                 }
             } catch {
-                vaultHealth = VaultHealth({
-                    tvl: 0,
-                    lastUpdate: 0,
-                    isHealthy: false,
-                    status: "Vault query failed"
-                });
+                vaultHealth = VaultHealth({ tvl: 0, lastUpdate: 0, isHealthy: false, status: "Vault query failed" });
             }
         }
     }
@@ -200,11 +183,12 @@ contract HealthMonitor is IHealthMonitor, AccessControl, Pausable {
         }
 
         // Get child vault data
-        try motherVault.getAllChildVaults() returns (uint32[] memory domainIds, IMotherVault.ChildVault[] memory vaults) {
+        try motherVault.getAllChildVaults() returns (uint32[] memory domainIds, IMotherVault.ChildVault[] memory vaults)
+        {
             for (uint256 i = 0; i < domainIds.length; i++) {
                 if (vaults[i].isActive) {
                     activeVaults++;
-                    
+
                     // Update child vault health
                     bool vaultHealthy = block.timestamp - vaults[i].lastReportTime < STALE_DATA_THRESHOLD;
                     childVaultHealth[domainIds[i]] = VaultHealth({
@@ -263,14 +247,20 @@ contract HealthMonitor is IHealthMonitor, AccessControl, Pausable {
         address contractAddress,
         string calldata errorMessage,
         bytes32 transactionHash
-    ) external override onlyRole(MONITOR_ROLE) {
-        failedOperations.push(FailedOperation({
-            timestamp: block.timestamp,
-            operationType: operationType,
-            contractAddress: contractAddress,
-            errorMessage: errorMessage,
-            transactionHash: transactionHash
-        }));
+    )
+        external
+        override
+        onlyRole(MONITOR_ROLE)
+    {
+        failedOperations.push(
+            FailedOperation({
+                timestamp: block.timestamp,
+                operationType: operationType,
+                contractAddress: contractAddress,
+                errorMessage: errorMessage,
+                transactionHash: transactionHash
+            })
+        );
 
         emit FailedOperationRecorded(operationType, contractAddress, errorMessage);
     }
@@ -280,12 +270,17 @@ contract HealthMonitor is IHealthMonitor, AccessControl, Pausable {
      * @param limit Maximum number of operations to return (0 for all)
      * @return operations Array of recent failed operations
      */
-    function getRecentFailedOperations(uint256 limit) external view override returns (FailedOperation[] memory operations) {
+    function getRecentFailedOperations(uint256 limit)
+        external
+        view
+        override
+        returns (FailedOperation[] memory operations)
+    {
         uint256 total = failedOperations.length;
         uint256 returnCount = (limit == 0 || limit > total) ? total : limit;
-        
+
         operations = new FailedOperation[](returnCount);
-        
+
         for (uint256 i = 0; i < returnCount; i++) {
             operations[i] = failedOperations[total - 1 - i]; // Return newest first
         }
@@ -297,16 +292,19 @@ contract HealthMonitor is IHealthMonitor, AccessControl, Pausable {
      * @return apyValues Array of APY values (in basis points)
      * @return lastUpdated Array of last update timestamps
      */
-    function getChildVaultAPYs() external view override returns (
-        uint32[] memory domainIds,
-        uint256[] memory apyValues,
-        uint256[] memory lastUpdated
-    ) {
-        try motherVault.getAllChildVaults() returns (uint32[] memory _domainIds, IMotherVault.ChildVault[] memory vaults) {
+    function getChildVaultAPYs()
+        external
+        view
+        override
+        returns (uint32[] memory domainIds, uint256[] memory apyValues, uint256[] memory lastUpdated)
+    {
+        try motherVault.getAllChildVaults() returns (
+            uint32[] memory _domainIds, IMotherVault.ChildVault[] memory vaults
+        ) {
             domainIds = _domainIds;
             apyValues = new uint256[](domainIds.length);
             lastUpdated = new uint256[](domainIds.length);
-            
+
             for (uint256 i = 0; i < domainIds.length; i++) {
                 apyValues[i] = vaults[i].reportedAPY;
                 lastUpdated[i] = vaults[i].lastReportTime;
@@ -325,11 +323,12 @@ contract HealthMonitor is IHealthMonitor, AccessControl, Pausable {
      * @return lastRebalanceTime Timestamp of last rebalance
      * @return cooldownRemaining Seconds remaining in cooldown period
      */
-    function getRebalancingMetrics() external view override returns (
-        bool canRebalance,
-        uint256 lastRebalanceTime,
-        uint256 cooldownRemaining
-    ) {
+    function getRebalancingMetrics()
+        external
+        view
+        override
+        returns (bool canRebalance, uint256 lastRebalanceTime, uint256 cooldownRemaining)
+    {
         try rebalancer.canRebalance() returns (bool _canRebalance) {
             canRebalance = _canRebalance;
         } catch {
@@ -344,7 +343,10 @@ contract HealthMonitor is IHealthMonitor, AccessControl, Pausable {
 
         // Calculate cooldown remaining
         try rebalancer.getRebalanceConfig() returns (IRebalancer.RebalanceConfig memory config) {
-            if (block.timestamp < lastRebalanceTime + config.rebalanceCooldown) {
+            if (
+                lastRebalanceTime > 0 && lastRebalanceTime <= block.timestamp
+                    && block.timestamp < lastRebalanceTime + config.rebalanceCooldown
+            ) {
                 cooldownRemaining = (lastRebalanceTime + config.rebalanceCooldown) - block.timestamp;
             } else {
                 cooldownRemaining = 0;
@@ -359,10 +361,12 @@ contract HealthMonitor is IHealthMonitor, AccessControl, Pausable {
      * @return systemHealthy Overall system health status
      * @return issues Array of detected issues
      */
-    function performManualHealthCheck() external override onlyRole(ADMIN_ROLE) returns (
-        bool systemHealthy,
-        string[] memory issues
-    ) {
+    function performManualHealthCheck()
+        external
+        override
+        onlyRole(ADMIN_ROLE)
+        returns (bool systemHealthy, string[] memory issues)
+    {
         string[] memory tempIssues = new string[](10); // Max 10 issues
         uint256 issueCount = 0;
         systemHealthy = true;
@@ -402,10 +406,12 @@ contract HealthMonitor is IHealthMonitor, AccessControl, Pausable {
         }
 
         // Check child vaults
-        try motherVault.getAllChildVaults() returns (uint32[] memory domainIds, IMotherVault.ChildVault[] memory vaults) {
+        try motherVault.getAllChildVaults() returns (uint32[] memory domainIds, IMotherVault.ChildVault[] memory vaults)
+        {
             for (uint256 i = 0; i < domainIds.length && issueCount < 8; i++) {
                 if (vaults[i].isActive && block.timestamp > vaults[i].lastReportTime + STALE_DATA_THRESHOLD) {
-                    tempIssues[issueCount] = string(abi.encodePacked("Child vault ", uint2str(domainIds[i]), " has stale data"));
+                    tempIssues[issueCount] =
+                        string(abi.encodePacked("Child vault ", uint2str(domainIds[i]), " has stale data"));
                     issueCount++;
                     systemHealthy = false;
                 }
@@ -422,7 +428,9 @@ contract HealthMonitor is IHealthMonitor, AccessControl, Pausable {
             issues[i] = tempIssues[i];
         }
 
-        emit HealthCheckCompleted(block.timestamp, systemHealthy, systemHealthy ? "Manual check passed" : "Issues found");
+        emit HealthCheckCompleted(
+            block.timestamp, systemHealthy, systemHealthy ? "Manual check passed" : "Issues found"
+        );
     }
 
     /**
@@ -435,7 +443,11 @@ contract HealthMonitor is IHealthMonitor, AccessControl, Pausable {
         address _motherVault,
         address _crossChainMessenger,
         address _rebalancer
-    ) external override onlyRole(DEFAULT_ADMIN_ROLE) {
+    )
+        external
+        override
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
         require(_motherVault != address(0), "Invalid Mother Vault");
         require(_crossChainMessenger != address(0), "Invalid Cross Chain Messenger");
         require(_rebalancer != address(0), "Invalid Rebalancer");
@@ -474,20 +486,20 @@ contract HealthMonitor is IHealthMonitor, AccessControl, Pausable {
      * @param _i Integer to convert
      * @return _uintAsString String representation
      */
-    function uint2str(uint _i) internal pure returns (string memory _uintAsString) {
+    function uint2str(uint256 _i) internal pure returns (string memory _uintAsString) {
         if (_i == 0) {
             return "0";
         }
-        uint j = _i;
-        uint len;
+        uint256 j = _i;
+        uint256 len;
         while (j != 0) {
             len++;
             j /= 10;
         }
         bytes memory bstr = new bytes(len);
-        uint k = len;
+        uint256 k = len;
         while (_i != 0) {
-            k = k-1;
+            k = k - 1;
             uint8 temp = (48 + uint8(_i - _i / 10 * 10));
             bytes1 b1 = bytes1(temp);
             bstr[k] = b1;

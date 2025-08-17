@@ -9,83 +9,79 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        background: "var(--background)",
-        foreground: "var(--foreground)",
-        border: "var(--border)",
-        input: "var(--input)",
-        ring: "var(--ring)",
-        accent: "var(--accent)",
+        // Primary palette
         primary: {
-          50: "#eef2ff",
-          100: "#e0e7ff",
-          200: "#c7d2fe",
-          300: "#a5b4fc",
-          400: "#818cf8",
-          500: "#6366f1",
-          600: "#4f46e5",
-          700: "#4338ca",
-          800: "#3730a3",
-          900: "#312e81",
-          950: "#1e1b4b",
+          DEFAULT: "#4CA8A1",
+          hover: "#3E8F89",
+          subtle: "#E8F6F5",
         },
+        // Secondary palette
+        secondary: {
+          DEFAULT: "#D6C7A1",
+          hover: "#C4B48C",
+        },
+        // Accent colors
+        mist: "#EAEFF2",
+        // Background colors
+        background: "#F9FBFB",
+        surface: "#F3FAF8",
+        // Border colors
+        border: {
+          DEFAULT: "#D9E6E3",
+          subtle: "rgba(217, 230, 227, 0.5)",
+        },
+        // Text colors
+        text: {
+          title: "#0F1416",
+          body: "#1C1C1C",
+          muted: "#5C6B6A",
+        },
+        // Status colors
         success: {
-          50: "#f0fdf4",
-          100: "#dcfce7",
-          200: "#bbf7d0",
-          300: "#86efac",
-          400: "#4ade80",
-          500: "#22c55e",
-          600: "#16a34a",
-          700: "#15803d",
-          800: "#166534",
-          900: "#14532d",
+          DEFAULT: "#1AAE6F",
+          subtle: "#E5F7EF",
         },
         warning: {
-          50: "#fffbeb",
-          100: "#fef3c7",
-          200: "#fde68a",
-          300: "#fcd34d",
-          400: "#fbbf24",
-          500: "#f59e0b",
-          600: "#d97706",
-          700: "#b45309",
-          800: "#92400e",
-          900: "#78350f",
+          DEFAULT: "#E6A700",
+          subtle: "#FFF8E1",
         },
         error: {
-          50: "#fef2f2",
-          100: "#fee2e2",
-          200: "#fecaca",
-          300: "#fca5a5",
-          400: "#f87171",
-          500: "#ef4444",
-          600: "#dc2626",
-          700: "#b91c1c",
-          800: "#991b1b",
-          900: "#7f1d1d",
+          DEFAULT: "#E25555",
+          subtle: "#FFEBEB",
         },
-        neutral: {
-          50: "#fafafa",
-          100: "#f5f5f5",
-          200: "#e5e5e5",
-          300: "#d4d4d4",
-          400: "#a3a3a3",
-          500: "#737373",
-          600: "#525252",
-          700: "#404040",
-          800: "#262626",
-          900: "#171717",
-          950: "#0a0a0a",
-        },
+        // Interactive states
+        focus: "#72D1CB",
+        white: "#FFFFFF",
+      },
+      borderRadius: {
+        xs: "6px",
+        sm: "10px",
+        md: "14px",
+        lg: "18px",
+        xl: "24px",
+        pill: "9999px",
+      },
+      boxShadow: {
+        sm: "0 1px 2px rgba(15, 20, 22, 0.06)",
+        md: "0 8px 24px rgba(15, 20, 22, 0.08)",
+        lg: "0 16px 40px rgba(15, 20, 22, 0.10)",
+        glass: "inset 0 0 0 1px rgba(76, 168, 161, 0.25)",
+        focus: "0 0 0 3px rgba(114, 209, 203, 0.5)",
       },
       fontFamily: {
-        sans: ["Inter", "system-ui", "sans-serif"],
-        mono: ["JetBrains Mono", "monospace"],
+        heading: ["Poppins", "ui-sans-serif", "system-ui", "-apple-system", "sans-serif"],
+        body: ["Inter", "ui-sans-serif", "system-ui", "-apple-system", "sans-serif"],
+        mono: ["ui-monospace", "SFMono-Regular", "Consolas", "monospace"],
+      },
+      spacing: {
+        18: "4.5rem",
+        22: "5.5rem",
       },
       animation: {
-        "fade-in": "fadeIn 0.5s ease-in-out",
+        "fade-in": "fadeIn 0.5s ease-out",
         "slide-up": "slideUp 0.3s ease-out",
-        "pulse-slow": "pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite",
+        "value-pulse": "valuePulse 350ms ease-out",
+        "skeleton": "skeleton 1.2s linear infinite",
       },
       keyframes: {
         fadeIn: {
@@ -96,13 +92,51 @@ const config: Config = {
           "0%": { transform: "translateY(10px)", opacity: "0" },
           "100%": { transform: "translateY(0)", opacity: "1" },
         },
+        valuePulse: {
+          "0%, 100%": { transform: "scale(1)" },
+          "50%": { transform: "scale(1.12)" },
+        },
+        skeleton: {
+          "0%": { backgroundPosition: "100% 0" },
+          "100%": { backgroundPosition: "-100% 0" },
+        },
       },
-      boxShadow: {
-        glow: "0 0 20px rgba(99, 102, 241, 0.3)",
-        "glow-success": "0 0 20px rgba(34, 197, 94, 0.3)",
+      transitionDuration: {
+        fast: "200ms",
+        normal: "300ms",
+        slow: "500ms",
       },
     },
   },
-  plugins: [],
+  plugins: [
+    function({ addUtilities, theme }: any) {
+      const newUtilities = {
+        ".focus-ring": {
+          outline: "none",
+          boxShadow: theme("boxShadow.focus"),
+        },
+        ".card": {
+          background: theme("colors.surface"),
+          border: `1px solid ${theme("colors.border.DEFAULT")}`,
+          borderRadius: theme("borderRadius.lg"),
+          boxShadow: theme("boxShadow.sm"),
+        },
+        ".stat": {
+          background: theme("colors.surface"),
+          border: `1px solid ${theme("colors.border.DEFAULT")}`,
+          borderRadius: theme("borderRadius.lg"),
+          boxShadow: theme("boxShadow.sm"),
+          padding: "1.25rem",
+        },
+        ".skeleton": {
+          background: `linear-gradient(90deg, ${theme("colors.mist")} 25%, ${theme("colors.surface")} 37%, ${theme("colors.mist")} 63%)`,
+          backgroundSize: "400% 100%",
+          animation: theme("animation.skeleton"),
+        },
+      };
+      addUtilities(newUtilities);
+    },
+  ],
 };
+
 export default config;

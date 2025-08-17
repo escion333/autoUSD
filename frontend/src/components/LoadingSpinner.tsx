@@ -20,10 +20,10 @@ export function LoadingSpinner({
   const spinner = (
     <div className="flex flex-col items-center justify-center">
       <div 
-        className={`${sizeClasses[size]} border-blue-200 border-t-blue-600 rounded-full animate-spin`}
+        className={`${sizeClasses[size]} border-primary/20 border-t-primary rounded-full animate-spin`}
       />
       {message && (
-        <p className="mt-3 text-sm text-gray-700">{message}</p>
+        <p className="mt-3 text-sm text-text-muted">{message}</p>
       )}
     </div>
   );

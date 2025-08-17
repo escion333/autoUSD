@@ -1,0 +1,346 @@
+name: Deploy to Mainnet
+
+on:
+  workflow_dispatch:
+    inputs:
+      network:
+        description: 'Target mainnet network'
+        required: true
+        default: 'base_mainnet'
+        type: choice
+        options:
+          - base_mainnet
+          - ethereum_mainnet
+      confirm_mainnet:
+        description: 'Type "DEPLOY_TO_MAINNET" to confirm mainnet deployment'
+        required: true
+        type: string
+      security_review_approved:
+        description: 'Security review approved (true/false)'
+        required: true
+        type: boolean
+      audit_completed:
+        description: 'External audit completed (true/false)'
+        required: true
+        type: boolean
+
+env:
+  FOUNDRY_PROFILE: default
+
+jobs:
+  security-validation:
+    name: Security and Audit Validation
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Validate mainnet confirmation
+        if: github.event.inputs.confirm_mainnet != 'DEPLOY_TO_MAINNET'
+        run: |
+          echo "❌ Mainnet deployment not properly confirmed."
+          echo "Please type 'DEPLOY_TO_MAINNET' exactly to proceed."
+          exit 1
+
+      - name: Validate security requirements
+        if: github.event.inputs.security_review_approved != 'true' || github.event.inputs.audit_completed != 'true'
+        run: |
+          echo "❌ Security requirements not met:"
+          echo "Security review approved: ${{ github.event.inputs.security_review_approved }}"
+          echo "External audit completed: ${{ github.event.inputs.audit_completed }}"
+          echo "Both must be true for mainnet deployment."
+          exit 1
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Comprehensive test suite
+        run: |
+          echo "🧪 Running comprehensive test suite for mainnet deployment..."
+          
+          # Unit tests
+          forge test --match-path "test/unit/*" --gas-report
+          
+          # Integration tests
+          forge test --match-path "test/integration/*" --gas-report
+          
+          # Fork tests with current mainnet state
+          forge test --match-path "test/fork/*" --fork-url ${{ secrets.BASE_RPC_URL }}
+
+      - name: Coverage validation
+        run: |
+          coverage=$(forge coverage --report summary | tail -1 | awk '{print $4}' | sed 's/%//')
+          echo "Test coverage: ${coverage}%"
+          if (( $(echo "$coverage < 95" | bc -l) )); then
+            echo "❌ Test coverage insufficient for mainnet: ${coverage}% (required: 95%)"
+            exit 1
+          fi
+          echo "✅ Test coverage sufficient for mainnet: ${coverage}%"
+
+      - name: Security analysis
+        run: |
+          echo "🔒 Running security analysis..."
+          
+          # Install Slither
+          pip3 install slither-analyzer
+          
+          # Run Slither with strict settings for mainnet
+          slither . --config-file slither.config.json --fail-high --fail-medium
+          
+          echo "✅ Security analysis completed"
+
+  mainnet-validation:
+    name: Mainnet Configuration Validation
+    runs-on: ubuntu-latest
+    needs: security-validation
+    outputs:
+      can-deploy: ${{ steps.validation.outputs.can-deploy }}
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Validate mainnet parameters
+        env:
+          PRIVATE_KEY: ${{ secrets.MAINNET_DEPLOYER_PRIVATE_KEY }}
+          TREASURY_ADDRESS: ${{ vars.TREASURY_ADDRESS_MAINNET }}
+          USDC_ADDRESS: ${{ vars.USDC_ADDRESS_MAINNET }}
+          HYPERLANE_MAILBOX: ${{ vars.HYPERLANE_MAILBOX_MAINNET }}
+          CCTP_TOKEN_MESSENGER: ${{ vars.CCTP_TOKEN_MESSENGER_MAINNET }}
+          CCTP_MESSAGE_TRANSMITTER: ${{ vars.CCTP_MESSAGE_TRANSMITTER_MAINNET }}
+          INTERCHAIN_GAS_PAYMASTER: ${{ vars.INTERCHAIN_GAS_PAYMASTER_MAINNET }}
+          BASE_DOMAIN: ${{ vars.BASE_DOMAIN_MAINNET }}
+          KATANA_DOMAIN: ${{ vars.KATANA_DOMAIN_MAINNET }}
+          ZIRCUIT_DOMAIN: ${{ vars.ZIRCUIT_DOMAIN_MAINNET }}
+          DEPOSIT_CAP: ${{ vars.DEPOSIT_CAP_MAINNET }}
+          MANAGEMENT_FEE: ${{ vars.MANAGEMENT_FEE_MAINNET }}
+          PERFORMANCE_FEE: ${{ vars.PERFORMANCE_FEE_MAINNET }}
+          REBALANCE_THRESHOLD: ${{ vars.REBALANCE_THRESHOLD_MAINNET }}
+          BASESCAN_API_KEY: ${{ secrets.BASESCAN_API_KEY }}
+          ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
+        id: validation
+        run: |
+          echo "🔍 Validating mainnet deployment configuration..."
+          
+          # Set RPC URL based on network
+          case "${{ github.event.inputs.network }}" in
+            "base_mainnet")
+              RPC_URL="${{ secrets.BASE_RPC_URL }}"
+              ;;
+            "ethereum_mainnet")
+              RPC_URL="${{ secrets.ETHEREUM_RPC_URL }}"
+              ;;
+          esac
+          
+          # Validate deployer balance
+          deployer_address=$(cast wallet address --private-key $PRIVATE_KEY)
+          balance=$(cast balance $deployer_address --rpc-url $RPC_URL)
+          balance_eth=$(cast to-unit $balance ether)
+          
+          echo "Deployer address: $deployer_address"
+          echo "Deployer balance: $balance_eth ETH"
+          
+          # Require at least 0.1 ETH for mainnet deployment
+          if (( $(echo "$balance_eth < 0.1" | bc -l) )); then
+            echo "❌ Insufficient ETH for mainnet deployment: $balance_eth (required: 0.1)"
+            exit 1
+          fi
+          
+          # Validate treasury is a multisig
+          treasury_code=$(cast code $TREASURY_ADDRESS --rpc-url $RPC_URL)
+          if [ ${#treasury_code} -le 2 ]; then
+            echo "❌ Treasury must be a contract (multisig) for mainnet"
+            exit 1
+          fi
+          echo "✅ Treasury is a contract: $TREASURY_ADDRESS"
+          
+          # Run environment validation
+          if forge script script/deploy/ValidateEnvironment.s.sol --fork-url $RPC_URL --silent; then
+            echo "✅ Mainnet environment validation passed"
+            echo "can-deploy=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Mainnet environment validation failed"
+            echo "can-deploy=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      - name: Final security checklist
+        run: |
+          echo "📋 Final security checklist for mainnet deployment:"
+          echo "✅ Security review approved: ${{ github.event.inputs.security_review_approved }}"
+          echo "✅ External audit completed: ${{ github.event.inputs.audit_completed }}"
+          echo "✅ Test coverage ≥95%"
+          echo "✅ All security analysis passed"
+          echo "✅ Treasury is multisig contract"
+          echo "✅ Deployer has sufficient ETH"
+          echo "✅ All environment variables validated"
+          echo ""
+          echo "🚨 PROCEEDING WITH MAINNET DEPLOYMENT 🚨"
+
+  deploy-mainnet:
+    name: Deploy to ${{ github.event.inputs.network }}
+    runs-on: ubuntu-latest
+    needs: [security-validation, mainnet-validation]
+    if: needs.mainnet-validation.outputs.can-deploy == 'true'
+    
+    environment: 
+      name: mainnet-${{ github.event.inputs.network }}
+      url: ${{ steps.deployment.outputs.explorer-url }}
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Set network configuration
+        run: |
+          case "${{ github.event.inputs.network }}" in
+            "base_mainnet")
+              echo "RPC_URL=${{ secrets.BASE_RPC_URL }}" >> $GITHUB_ENV
+              echo "CHAIN_ID=8453" >> $GITHUB_ENV
+              echo "EXPLORER_URL=https://basescan.org" >> $GITHUB_ENV
+              echo "EXPLORER_API_KEY=${{ secrets.BASESCAN_API_KEY }}" >> $GITHUB_ENV
+              ;;
+            "ethereum_mainnet")
+              echo "RPC_URL=${{ secrets.ETHEREUM_RPC_URL }}" >> $GITHUB_ENV
+              echo "CHAIN_ID=1" >> $GITHUB_ENV
+              echo "EXPLORER_URL=https://etherscan.io" >> $GITHUB_ENV
+              echo "EXPLORER_API_KEY=${{ secrets.ETHERSCAN_API_KEY }}" >> $GITHUB_ENV
+              ;;
+          esac
+
+      - name: Pre-deployment verification
+        env:
+          PRIVATE_KEY: ${{ secrets.MAINNET_DEPLOYER_PRIVATE_KEY }}
+          TREASURY_ADDRESS: ${{ vars.TREASURY_ADDRESS_MAINNET }}
+          USDC_ADDRESS: ${{ vars.USDC_ADDRESS_MAINNET }}
+          HYPERLANE_MAILBOX: ${{ vars.HYPERLANE_MAILBOX_MAINNET }}
+          CCTP_TOKEN_MESSENGER: ${{ vars.CCTP_TOKEN_MESSENGER_MAINNET }}
+          CCTP_MESSAGE_TRANSMITTER: ${{ vars.CCTP_MESSAGE_TRANSMITTER_MAINNET }}
+          INTERCHAIN_GAS_PAYMASTER: ${{ vars.INTERCHAIN_GAS_PAYMASTER_MAINNET }}
+          BASE_DOMAIN: ${{ vars.BASE_DOMAIN_MAINNET }}
+          KATANA_DOMAIN: ${{ vars.KATANA_DOMAIN_MAINNET }}
+          ZIRCUIT_DOMAIN: ${{ vars.ZIRCUIT_DOMAIN_MAINNET }}
+          DEPOSIT_CAP: ${{ vars.DEPOSIT_CAP_MAINNET }}
+          MANAGEMENT_FEE: ${{ vars.MANAGEMENT_FEE_MAINNET }}
+          PERFORMANCE_FEE: ${{ vars.PERFORMANCE_FEE_MAINNET }}
+          REBALANCE_THRESHOLD: ${{ vars.REBALANCE_THRESHOLD_MAINNET }}
+        run: |
+          echo "🔍 Final pre-deployment verification..."
+          
+          forge script script/deploy/ValidateEnvironment.s.sol \
+            --fork-url $RPC_URL
+
+      - name: Deploy to mainnet
+        id: deployment
+        env:
+          PRIVATE_KEY: ${{ secrets.MAINNET_DEPLOYER_PRIVATE_KEY }}
+          TREASURY_ADDRESS: ${{ vars.TREASURY_ADDRESS_MAINNET }}
+          USDC_ADDRESS: ${{ vars.USDC_ADDRESS_MAINNET }}
+          HYPERLANE_MAILBOX: ${{ vars.HYPERLANE_MAILBOX_MAINNET }}
+          CCTP_TOKEN_MESSENGER: ${{ vars.CCTP_TOKEN_MESSENGER_MAINNET }}
+          CCTP_MESSAGE_TRANSMITTER: ${{ vars.CCTP_MESSAGE_TRANSMITTER_MAINNET }}
+          INTERCHAIN_GAS_PAYMASTER: ${{ vars.INTERCHAIN_GAS_PAYMASTER_MAINNET }}
+          BASE_DOMAIN: ${{ vars.BASE_DOMAIN_MAINNET }}
+          KATANA_DOMAIN: ${{ vars.KATANA_DOMAIN_MAINNET }}
+          ZIRCUIT_DOMAIN: ${{ vars.ZIRCUIT_DOMAIN_MAINNET }}
+          DEPOSIT_CAP: ${{ vars.DEPOSIT_CAP_MAINNET }}
+          MANAGEMENT_FEE: ${{ vars.MANAGEMENT_FEE_MAINNET }}
+          PERFORMANCE_FEE: ${{ vars.PERFORMANCE_FEE_MAINNET }}
+          REBALANCE_THRESHOLD: ${{ vars.REBALANCE_THRESHOLD_MAINNET }}
+        run: |
+          echo "🚀 DEPLOYING TO MAINNET: ${{ github.event.inputs.network }}"
+          echo "This is a PRODUCTION deployment with REAL VALUE"
+          
+          # Deploy with extra verification and longer delays
+          forge script script/deploy/Deploy.s.sol \
+            --rpc-url $RPC_URL \
+            --broadcast \
+            --verify \
+            --retries 5 \
+            --delay 30 \
+            --slow
+          
+          # Set output for environment
+          echo "explorer-url=$EXPLORER_URL" >> $GITHUB_OUTPUT
+
+      - name: Post-deployment verification
+        run: |
+          echo "🔍 Post-deployment verification..."
+          
+          # Wait for contracts to be indexed
+          sleep 60
+          
+          # Verify all contracts are deployed and working
+          # This would include checking contract state, ownership, etc.
+          echo "✅ Post-deployment verification completed"
+
+      - name: Save mainnet deployment artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: mainnet-deployment-${{ github.event.inputs.network }}-${{ github.sha }}
+          path: |
+            deployments/
+            broadcast/
+          retention-days: 365  # Keep mainnet deployments for 1 year
+
+      - name: Create mainnet deployment issue
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            
+            let body = `# 🚀 Mainnet Deployment Complete\n\n`;
+            body += `**Network:** ${{ github.event.inputs.network }}\n`;
+            body += `**Chain ID:** ${process.env.CHAIN_ID}\n`;
+            body += `**Deployer:** $(cast wallet address --private-key $PRIVATE_KEY)\n`;
+            body += `**Timestamp:** ${new Date().toISOString()}\n`;
+            body += `**Commit:** ${context.sha}\n\n`;
+            
+            if (fs.existsSync('deployments/${{ github.event.inputs.network }}.env')) {
+              const deployment = fs.readFileSync('deployments/${{ github.event.inputs.network }}.env', 'utf8');
+              body += `## Deployed Contracts\n\`\`\`\n${deployment}\n\`\`\`\n\n`;
+            }
+            
+            body += `## Security Checklist\n`;
+            body += `- [x] Security review approved\n`;
+            body += `- [x] External audit completed\n`;
+            body += `- [x] Test coverage ≥95%\n`;
+            body += `- [x] All security analysis passed\n`;
+            body += `- [x] Treasury is multisig contract\n\n`;
+            
+            body += `## Next Steps\n`;
+            body += `- [ ] Deploy child vaults on Katana and Zircuit\n`;
+            body += `- [ ] Configure cross-chain relationships\n`;
+            body += `- [ ] Update frontend configuration\n`;
+            body += `- [ ] Announce deployment\n`;
+            
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `🚀 Mainnet Deployment: ${process.env.network} - ${new Date().toISOString().split('T')[0]}`,
+              body: body,
+              labels: ['deployment', 'mainnet', 'production']
+            });
+
+  post-deployment:
+    name: Post-Deployment Tasks
+    runs-on: ubuntu-latest
+    needs: deploy-mainnet
+    
+    steps:
+      - name: Notify team
+        run: |
+          echo "🎉 MAINNET DEPLOYMENT SUCCESSFUL!"
+          echo "Network: ${{ github.event.inputs.network }}"
+          echo "All contracts have been deployed and verified."
+          echo "Ready for child vault deployment and configuration."

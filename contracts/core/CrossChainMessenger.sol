@@ -1,28 +1,22 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
-import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {ICrossChainMessenger} from "../interfaces/ICrossChainMessenger.sol";
-import {IMessageRecipient} from "../interfaces/Hyperlane/IMessageRecipient.sol";
-import {IMailbox} from "../interfaces/Hyperlane/IMailbox.sol";
-import {IInterchainGasPaymaster} from "../interfaces/Hyperlane/IInterchainGasPaymaster.sol";
-import {IMotherVault} from "../interfaces/IMotherVault.sol";
-import {CCTPBridge} from "./CCTPBridge.sol";
+import { AccessControl } from "@openzeppelin/contracts/access/AccessControl.sol";
+import { Pausable } from "@openzeppelin/contracts/utils/Pausable.sol";
+import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import { ICrossChainMessenger } from "../interfaces/ICrossChainMessenger.sol";
+import { IMessageRecipient } from "../interfaces/Hyperlane/IMessageRecipient.sol";
+import { IMailbox } from "../interfaces/Hyperlane/IMailbox.sol";
+import { IInterchainGasPaymaster } from "../interfaces/Hyperlane/IInterchainGasPaymaster.sol";
+import { IMotherVault } from "../interfaces/IMotherVault.sol";
+import { CCTPBridge } from "./CCTPBridge.sol";
 
 /**
  * @title CrossChainMessenger
  * @notice Coordinates cross-chain messaging between CCTP (for USDC) and Hyperlane (for messages)
  * @dev Implements the ICrossChainMessenger interface to provide unified cross-chain operations
  */
-contract CrossChainMessenger is 
-    ICrossChainMessenger, 
-    IMessageRecipient,
-    AccessControl, 
-    Pausable, 
-    ReentrancyGuard 
-{
+contract CrossChainMessenger is ICrossChainMessenger, IMessageRecipient, AccessControl, Pausable, ReentrancyGuard {
     // Roles
     bytes32 public constant MESSENGER_ROLE = keccak256("MESSENGER_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
@@ -79,7 +73,7 @@ contract CrossChainMessenger is
     event MessageRetryAttempted(bytes32 indexed messageId, uint256 attempt, bool success);
     event MessageRetryFailed(bytes32 indexed messageId, uint256 totalAttempts);
     event MessageManuallyRetried(bytes32 indexed messageId, bytes32 newMessageId);
-    
+
     // Additional errors
     error MessageTooLarge(uint256 size);
     error MessageExpired(uint256 expiry);
@@ -119,7 +113,7 @@ contract CrossChainMessenger is
         _configureDomain(8453, 8453); // Base
         _configureDomain(1, 1); // Ethereum
         _configureDomain(10, 10); // Optimism
-        _configureDomain(42161, 42161); // Arbitrum
+        _configureDomain(42_161, 42_161); // Arbitrum
     }
 
     /**
@@ -127,9 +121,15 @@ contract CrossChainMessenger is
      * @param message The message to send
      * @return messageId Unique identifier for the message
      */
-    function sendCrossChainMessage(
-        CrossChainMessage calldata message
-    ) external payable override nonReentrant whenNotPaused onlyRole(MESSENGER_ROLE) returns (bytes32 messageId) {
+    function sendCrossChainMessage(CrossChainMessage calldata message)
+        external
+        payable
+        override
+        nonReentrant
+        whenNotPaused
+        onlyRole(MESSENGER_ROLE)
+        returns (bytes32 messageId)
+    {
         // Create a memory copy for internal processing
         CrossChainMessage memory messageCopy = message;
         return _sendCrossChainMessageWithRetry(messageCopy, msg.value, msg.sender);
@@ -146,7 +146,10 @@ contract CrossChainMessenger is
         CrossChainMessage memory message,
         uint256 gasPayment,
         address sender
-    ) internal returns (bytes32 messageId) {
+    )
+        internal
+        returns (bytes32 messageId)
+    {
         // Validate message
         if (message.payload.length > MAX_MESSAGE_SIZE) {
             revert MessageTooLarge(message.payload.length);
@@ -160,13 +163,8 @@ contract CrossChainMessenger is
         require(hyperlaneDomain != 0, "Unknown chain");
 
         // Encode the full message
-        bytes memory encodedMessage = abi.encode(
-            message.messageType,
-            message.targetVault,
-            message.payload,
-            message.nonce,
-            message.timestamp
-        );
+        bytes memory encodedMessage =
+            abi.encode(message.messageType, message.targetVault, message.payload, message.nonce, message.timestamp);
 
         // Convert target address to bytes32
         bytes32 recipientAddress = bytes32(uint256(uint160(message.targetVault)));
@@ -177,20 +175,11 @@ contract CrossChainMessenger is
             revert InsufficientGasPayment(requiredGasPayment, gasPayment);
         }
 
-        try hyperlaneMailbox.dispatch(
-            hyperlaneDomain,
-            recipientAddress,
-            encodedMessage
-        ) returns (bytes32 _messageId) {
+        try hyperlaneMailbox.dispatch(hyperlaneDomain, recipientAddress, encodedMessage) returns (bytes32 _messageId) {
             messageId = _messageId;
-            
+
             // Pay for gas
-            try gasPaymaster.payForGas{value: gasPayment}(
-                messageId,
-                hyperlaneDomain,
-                DEFAULT_GAS_LIMIT,
-                sender
-            ) {
+            try gasPaymaster.payForGas{ value: gasPayment }(messageId, hyperlaneDomain, DEFAULT_GAS_LIMIT, sender) {
                 emit MessageSent(message.targetChainId, message.messageType, messageId, message.nonce);
             } catch (bytes memory reason) {
                 // If gas payment fails, schedule for retry
@@ -219,7 +208,9 @@ contract CrossChainMessenger is
         uint256 gasPayment,
         address sender,
         bytes memory failureReason
-    ) internal {
+    )
+        internal
+    {
         failedMessages[messageId] = FailedMessage({
             messageId: messageId,
             attempts: 0,
@@ -232,13 +223,9 @@ contract CrossChainMessenger is
         });
 
         userFailedMessages[sender].push(messageId);
-        
-        messageStatuses[messageId] = MessageStatus({
-            processed: false,
-            success: false,
-            timestamp: block.timestamp,
-            returnData: failureReason
-        });
+
+        messageStatuses[messageId] =
+            MessageStatus({ processed: false, success: false, timestamp: block.timestamp, returnData: failureReason });
 
         emit MessageRetryScheduled(messageId, 0, block.timestamp + retryDelays[0]);
     }
@@ -249,7 +236,7 @@ contract CrossChainMessenger is
      */
     function retryFailedMessage(bytes32 messageId) external nonReentrant whenNotPaused {
         FailedMessage storage failed = failedMessages[messageId];
-        
+
         if (failed.messageId == bytes32(0)) revert MessageNotFailed(messageId);
         if (failed.resolved) revert MessageAlreadyResolved(messageId);
         if (failed.attempts >= MAX_RETRIES) revert MaxRetriesExceeded(messageId);
@@ -268,28 +255,28 @@ contract CrossChainMessenger is
         bytes32 recipientAddress = bytes32(uint256(uint160(failed.originalMessage.targetVault)));
 
         bool success = false;
-        try hyperlaneMailbox.dispatch(
-            hyperlaneDomain,
-            recipientAddress,
-            failed.messageData
-        ) returns (bytes32 newMessageId) {
+        try hyperlaneMailbox.dispatch(hyperlaneDomain, recipientAddress, failed.messageData) returns (
+            bytes32 newMessageId
+        ) {
             // Update message ID
             failed.messageId = newMessageId;
-            
-            try gasPaymaster.payForGas{value: failed.gasPayment}(
-                newMessageId,
-                hyperlaneDomain,
-                DEFAULT_GAS_LIMIT,
-                failed.sender
+
+            try gasPaymaster.payForGas{ value: failed.gasPayment }(
+                newMessageId, hyperlaneDomain, DEFAULT_GAS_LIMIT, failed.sender
             ) {
                 success = true;
                 failed.resolved = true;
-                
+
                 messageStatuses[messageId].success = true;
                 messageStatuses[messageId].processed = true;
                 messageStatuses[messageId].timestamp = block.timestamp;
-                
-                emit MessageSent(failed.originalMessage.targetChainId, failed.originalMessage.messageType, newMessageId, failed.originalMessage.nonce);
+
+                emit MessageSent(
+                    failed.originalMessage.targetChainId,
+                    failed.originalMessage.messageType,
+                    newMessageId,
+                    failed.originalMessage.nonce
+                );
             } catch {
                 // Gas payment failed, will retry later
             }
@@ -302,7 +289,8 @@ contract CrossChainMessenger is
         if (!success && failed.attempts >= MAX_RETRIES) {
             emit MessageRetryFailed(messageId, failed.attempts);
         } else if (!success) {
-            uint256 nextRetryTime = block.timestamp + retryDelays[failed.attempts < retryDelays.length ? failed.attempts : retryDelays.length - 1];
+            uint256 nextRetryTime = block.timestamp
+                + retryDelays[failed.attempts < retryDelays.length ? failed.attempts : retryDelays.length - 1];
             emit MessageRetryScheduled(messageId, failed.attempts, nextRetryTime);
         }
     }
@@ -311,25 +299,32 @@ contract CrossChainMessenger is
      * @notice Manually retry a failed message (admin only)
      * @param messageId Message identifier to retry
      */
-    function manualRetryMessage(bytes32 messageId) external payable nonReentrant whenNotPaused onlyRole(RETRIER_ROLE) returns (bytes32 newMessageId) {
+    function manualRetryMessage(bytes32 messageId)
+        external
+        payable
+        nonReentrant
+        whenNotPaused
+        onlyRole(RETRIER_ROLE)
+        returns (bytes32 newMessageId)
+    {
         FailedMessage storage failed = failedMessages[messageId];
-        
+
         if (failed.messageId == bytes32(0)) revert MessageNotFailed(messageId);
         if (failed.resolved) revert MessageAlreadyResolved(messageId);
 
         // Mark as resolved regardless of outcome
         failed.resolved = true;
-        
+
         // Create a memory copy of the original message for calldata
         CrossChainMessage memory messageCopy = failed.originalMessage;
-        
+
         // Attempt manual retry with potentially updated gas payment
         newMessageId = _sendCrossChainMessageWithRetry(messageCopy, msg.value, failed.sender);
-        
+
         messageStatuses[messageId].success = true;
         messageStatuses[messageId].processed = true;
         messageStatuses[messageId].timestamp = block.timestamp;
-        
+
         emit MessageManuallyRetried(messageId, newMessageId);
     }
 
@@ -343,7 +338,12 @@ contract CrossChainMessenger is
         uint32 _origin,
         bytes32 _sender,
         bytes calldata _message
-    ) external payable override(ICrossChainMessenger, IMessageRecipient) nonReentrant {
+    )
+        external
+        payable
+        override (ICrossChainMessenger, IMessageRecipient)
+        nonReentrant
+    {
         require(msg.sender == address(hyperlaneMailbox), "Only mailbox");
 
         // Verify trusted sender and domain
@@ -354,15 +354,10 @@ contract CrossChainMessenger is
 
         // Calculate message ID
         bytes32 messageId = keccak256(abi.encodePacked(_origin, _sender, _message));
-        
+
         // Decode message to verify recipient before further processing
-        (
-            MessageType messageType,
-            address targetVault,
-            bytes memory payload,
-            uint256 nonce,
-            uint256 timestamp
-        ) = abi.decode(_message, (MessageType, address, bytes, uint256, uint256));
+        (MessageType messageType, address targetVault, bytes memory payload, uint256 nonce, uint256 timestamp) =
+            abi.decode(_message, (MessageType, address, bytes, uint256, uint256));
 
         // Authenticate that this message is intended for this MotherVault
         require(targetVault == motherVault, "Recipient mismatch");
@@ -385,10 +380,10 @@ contract CrossChainMessenger is
         // Route the decoded message parts to the MotherVault for processing
         bool success;
         bytes memory returnData;
-        
+
         try IMotherVault(motherVault).handleIncomingMessage(_origin, _sender, abi.encode(messageType, payload)) {
-             success = true;
-             // No return data expected, so this block is empty
+            success = true;
+            // No return data expected, so this block is empty
         } catch Error(string memory reason) {
             success = false;
             returnData = bytes(reason);
@@ -398,12 +393,8 @@ contract CrossChainMessenger is
         }
 
         // Update status
-        messageStatuses[messageId] = MessageStatus({
-            processed: true,
-            success: success,
-            timestamp: block.timestamp,
-            returnData: returnData
-        });
+        messageStatuses[messageId] =
+            MessageStatus({ processed: true, success: success, timestamp: block.timestamp, returnData: returnData });
 
         emit MessageProcessed(messageId, success, returnData);
     }
@@ -434,14 +425,14 @@ contract CrossChainMessenger is
      */
     function canRetryMessage(bytes32 messageId) external view returns (bool canRetry, uint256 timeUntilRetry) {
         FailedMessage memory failed = failedMessages[messageId];
-        
+
         if (failed.messageId == bytes32(0) || failed.resolved || failed.attempts >= MAX_RETRIES) {
             return (false, 0);
         }
 
         uint256 retryDelay = retryDelays[failed.attempts];
         uint256 nextRetryTime = failed.lastAttempt + retryDelay;
-        
+
         if (block.timestamp >= nextRetryTime) {
             return (true, 0);
         } else {
@@ -463,10 +454,7 @@ contract CrossChainMessenger is
      * @param chainId Chain ID
      * @param domain Hyperlane domain ID
      */
-    function configureDomain(
-        uint256 chainId,
-        uint32 domain
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function configureDomain(uint256 chainId, uint32 domain) external onlyRole(DEFAULT_ADMIN_ROLE) {
         _configureDomain(chainId, domain);
     }
 
@@ -475,10 +463,7 @@ contract CrossChainMessenger is
      * @param domain Hyperlane domain
      * @param sender Trusted sender address (bytes32)
      */
-    function setTrustedSender(
-        uint32 domain,
-        bytes32 sender
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function setTrustedSender(uint32 domain, bytes32 sender) external onlyRole(DEFAULT_ADMIN_ROLE) {
         trustedSenders[domain] = sender;
         trustedDomains[domain] = true;
         emit TrustedSenderSet(domain, sender);
@@ -490,9 +475,7 @@ contract CrossChainMessenger is
      * @return processed Whether processed
      * @return success Whether successful
      */
-    function getMessageStatus(
-        bytes32 messageId
-    ) external view override returns (bool processed, bool success) {
+    function getMessageStatus(bytes32 messageId) external view override returns (bool processed, bool success) {
         MessageStatus memory status = messageStatuses[messageId];
         return (status.processed, status.success);
     }
@@ -502,12 +485,10 @@ contract CrossChainMessenger is
      * @param targetChainId Target chain ID
      * @return Estimated fee in wei
      */
-    function estimateMessageFee(
-        uint32 targetChainId
-    ) external view override returns (uint256) {
+    function estimateMessageFee(uint32 targetChainId) external view override returns (uint256) {
         uint32 domain = chainToHyperlaneDomain[targetChainId];
         if (domain == 0) return 0;
-        
+
         return gasPaymaster.quoteGasPayment(domain, DEFAULT_GAS_LIMIT);
     }
 

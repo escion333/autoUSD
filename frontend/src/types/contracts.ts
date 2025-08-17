@@ -106,9 +106,6 @@ export const getChainConfigs = (): Record<string, ChainConfig> => {
   }
 };
 
-// For backwards compatibility
-export const CHAIN_CONFIGS = getChainConfigs();
-
 export interface UserPosition {
   shares: bigint;
   assets: bigint;

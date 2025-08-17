@@ -97,32 +97,32 @@ export function TransactionConfirmModal({
       case 'confirm':
         if (details.type === 'auto-deposit') {
           return (
-            <svg className="w-12 h-12 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-12 h-12 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
             </svg>
           );
         } else if (details.type === 'manual-deposit') {
           return (
-            <svg className="w-12 h-12 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-12 h-12 text-warning" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
           );
         } else if (details.type === 'deposit') {
           return (
-            <svg className="w-12 h-12 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-12 h-12 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 11l5-5m0 0l5 5m-5-5v12" />
             </svg>
           );
         } else {
           return (
-            <svg className="w-12 h-12 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-12 h-12 text-warning" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 13l-5 5m0 0l-5-5m5 5V6" />
             </svg>
           );
         }
       case 'processing':
         return (
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
         );
       case 'success':
         return (
@@ -132,7 +132,7 @@ export function TransactionConfirmModal({
         );
       case 'error':
         return (
-          <svg className="w-12 h-12 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="w-12 h-12 text-error" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
         );
@@ -143,13 +143,13 @@ export function TransactionConfirmModal({
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-xl max-w-md w-full mx-4 overflow-hidden">
+      <div className="bg-white rounded-xl max-w-md w-full mx-4 overflow-hidden shadow-lg">
         {/* Header */}
         <div className={`px-6 py-4 ${
-          details.type === 'deposit' ? 'bg-green-50' : 'bg-orange-50'
+          details.type === 'deposit' ? 'bg-success-subtle' : 'bg-warning-subtle'
         }`}>
           <div className="flex justify-between items-center">
-            <h2 className="text-xl font-bold text-gray-900">
+            <h2 className="text-xl font-heading font-semibold text-text-title">
               {step === 'confirm' && `Confirm ${details.type === 'deposit' ? 'Deposit' : 'Withdrawal'}`}
               {step === 'processing' && 'Processing Transaction'}
               {step === 'success' && 'Transaction Successful'}
@@ -158,7 +158,7 @@ export function TransactionConfirmModal({
             {step === 'confirm' && (
               <button
                 onClick={onClose}
-                className="text-gray-700 hover:text-gray-800"
+                className="text-text-muted hover:text-text-body transition-colors"
                 disabled={isProcessing}
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -180,10 +180,10 @@ export function TransactionConfirmModal({
           {step === 'confirm' && (
             <>
               {/* Amount Display */}
-              <div className="bg-gray-50 rounded-lg p-4 mb-4">
+              <div className="bg-surface rounded-lg p-4 mb-4 border border-border">
                 <div className="text-center">
-                  <p className="text-sm text-gray-600 mb-1">Amount</p>
-                  <p className="text-3xl font-bold text-gray-900">{formatUSDC(details.amount)}</p>
+                  <p className="text-sm text-text-muted mb-1">Amount</p>
+                  <p className="text-3xl font-bold text-text-title tabular-nums">{formatUSDC(details.amount)}</p>
                 </div>
               </div>
 
@@ -191,36 +191,36 @@ export function TransactionConfirmModal({
               <div className="space-y-3 mb-6">
                 {details.currentBalance !== undefined && (
                   <div className="flex justify-between text-sm">
-                    <span className="text-gray-600">Current Balance</span>
-                    <span className="font-medium text-gray-900">{formatUSDC(details.currentBalance)}</span>
+                    <span className="text-text-muted">Current Balance</span>
+                    <span className="font-medium text-text-title">{formatUSDC(details.currentBalance)}</span>
                   </div>
                 )}
                 
                 {details.newBalance !== undefined && (
                   <div className="flex justify-between text-sm">
-                    <span className="text-gray-600">New Balance</span>
-                    <span className="font-medium text-gray-900">{formatUSDC(details.newBalance)}</span>
+                    <span className="text-text-muted">New Balance</span>
+                    <span className="font-medium text-text-title">{formatUSDC(details.newBalance)}</span>
                   </div>
                 )}
 
                 {details.apy !== undefined && (
                   <div className="flex justify-between text-sm">
-                    <span className="text-gray-600">Current APY</span>
-                    <span className="font-medium text-blue-600">{details.apy.toFixed(2)}%</span>
+                    <span className="text-text-muted">Current APY</span>
+                    <span className="font-medium text-primary">{details.apy.toFixed(2)}%</span>
                   </div>
                 )}
 
                 {details.estimatedTime && (
                   <div className="flex justify-between text-sm">
-                    <span className="text-gray-600">Estimated Time</span>
-                    <span className="font-medium text-gray-900">{details.estimatedTime}</span>
+                    <span className="text-text-muted">Estimated Time</span>
+                    <span className="font-medium text-text-title">{details.estimatedTime}</span>
                   </div>
                 )}
 
                 {details.estimatedGas !== undefined && (
                   <div className="flex justify-between text-sm">
-                    <span className="text-gray-600">Network Fee</span>
-                    <span className="font-medium text-gray-900">
+                    <span className="text-text-muted">Network Fee</span>
+                    <span className="font-medium text-text-title">
                       {details.estimatedGas === 0 ? 'Gasless (Sponsored)' : `~$${details.estimatedGas.toFixed(2)}`}
                     </span>
                   </div>
@@ -229,8 +229,8 @@ export function TransactionConfirmModal({
 
               {/* Warning for withdrawals */}
               {details.type === 'withdraw' && (
-                <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 mb-4">
-                  <p className="text-sm text-orange-800">
+                <div className="bg-warning-subtle border border-warning/20 rounded-lg p-3 mb-4">
+                  <p className="text-sm text-warning">
                     Withdrawals may take 1-3 minutes to process across chains
                   </p>
                 </div>
@@ -241,17 +241,17 @@ export function TransactionConfirmModal({
                 <button
                   onClick={onClose}
                   disabled={isProcessing}
-                  className="flex-1 py-3 px-4 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  className="flex-1 py-3 px-4 border border-border text-text-body rounded-lg font-medium hover:bg-mist disabled:opacity-50 disabled:cursor-not-allowed transition-all"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleConfirm}
                   disabled={isProcessing}
-                  className={`flex-1 py-3 px-4 text-white rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${
+                  className={`flex-1 py-3 px-4 text-white rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm hover:shadow-md ${
                     details.type === 'deposit' 
-                      ? 'bg-green-600 hover:bg-green-700' 
-                      : 'bg-orange-600 hover:bg-orange-700'
+                      ? 'bg-success hover:bg-success/90' 
+                      : 'bg-warning hover:bg-warning/90'
                   }`}
                 >
                   Confirm {details.type === 'deposit' ? 'Deposit' : 'Withdrawal'}
@@ -262,10 +262,10 @@ export function TransactionConfirmModal({
 
           {step === 'processing' && (
             <div className="text-center">
-              <p className="text-gray-700 mb-2">
+              <p className="text-text-body mb-2">
                 Processing your {details.type === 'deposit' ? 'deposit' : 'withdrawal'}...
               </p>
-              <p className="text-sm text-gray-600">
+              <p className="text-sm text-text-muted">
                 This may take a few moments. Please don't close this window.
               </p>
               {details.estimatedTime && (

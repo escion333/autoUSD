@@ -1,7 +1,10 @@
 'use client';
 
+export const dynamic = 'force-dynamic';
+
 import { useState, useEffect } from 'react';
-import { useCircleAuth } from '@/hooks/useCircleAuth';
+import Image from 'next/image';
+import { useAnvilAuth as useCircleAuth } from '@/hooks/useAnvilAuth';
 import { AuthModal } from '@/components/Auth/AuthModal';
 import { Dashboard } from '@/components/Dashboard/Dashboard';
 import { DepositModal } from '@/components/vault/DepositModal';
@@ -11,6 +14,8 @@ import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { ModalErrorBoundary } from '@/components/ModalErrorBoundary';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
 import { useMotherVault } from '@/hooks/useMotherVault';
+import { Button } from '@/components/ui/Button';
+import { Card, CardContent } from '@/components/ui/Card';
 
 export default function Home() {
   const { isAuthenticated, isLoading, user, logout } = useCircleAuth();
@@ -33,53 +38,63 @@ export default function Home() {
 
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-blue-50 to-white">
+      <div className="min-h-screen bg-background">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
           <div className="text-center py-16">
-            <h1 className="text-5xl font-bold text-gray-900 mb-4">
+            <Image
+              src="/LOGO.png"
+              alt="autoUSD"
+              width={160}
+              height={48}
+              className="mx-auto mb-8"
+              priority
+            />
+            <h1 className="text-5xl font-heading font-bold text-text-title mb-4">
               Grow Your Dollars
             </h1>
-            <p className="text-xl text-gray-600 mb-8">
+            <p className="text-xl text-text-muted mb-8 max-w-2xl mx-auto">
               Earn ~10% per year on your USDC. No fees. Withdraw anytime.
             </p>
-            <button
+            <Button
               onClick={() => setAuthModalOpen(true)}
-              className="px-8 py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors"
+              variant="primary"
+              size="lg"
+              pill
             >
               Get Started
-            </button>
+            </Button>
           </div>
 
           <div className="grid md:grid-cols-3 gap-8 mt-16">
-            <div className="text-center">
-              <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                <svg className="w-8 h-8 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <Card className="text-center p-6">
+              <div className="w-16 h-16 bg-primary-subtle rounded-full flex items-center justify-center mx-auto mb-4">
+                <svg className="w-8 h-8 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
               </div>
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">10% Annual Returns</h3>
-              <p className="text-gray-600">Your money grows automatically, every day</p>
-            </div>
+              <h3 className="text-lg font-heading font-semibold text-text-title mb-2">10% Annual Returns</h3>
+              <p className="text-text-muted">Your money grows automatically, every day</p>
+            </Card>
 
-            <div className="text-center">
-              <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <Card className="text-center p-6">
+              <div className="w-16 h-16 bg-success-subtle rounded-full flex items-center justify-center mx-auto mb-4">
+                <svg className="w-8 h-8 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
               </div>
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">No Gas Fees</h3>
-              <p className="text-gray-600">Gasless transactions powered by Circle's Paymaster</p>
-            </div>
+              <h3 className="text-lg font-heading font-semibold text-text-title mb-2">No Gas Fees</h3>
+              <p className="text-text-muted">Gasless transactions powered by Circle's Paymaster</p>
+            </Card>
 
-            <div className="text-center">
-              <div className="w-16 h-16 bg-purple-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                <svg className="w-8 h-8 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <Card className="text-center p-6">
+              <div className="w-16 h-16 bg-secondary/20 rounded-full flex items-center justify-center mx-auto mb-4">
+                <svg className="w-8 h-8 text-secondary-hover" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                 </svg>
               </div>
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">100% Your Money</h3>
-              <p className="text-gray-600">Withdraw anytime. No penalties or lockups</p>
-            </div>
+              <h3 className="text-lg font-heading font-semibold text-text-title mb-2">100% Your Money</h3>
+              <p className="text-text-muted">Withdraw anytime. No penalties or lockups</p>
+            </Card>
           </div>
         </div>
 
@@ -102,35 +117,44 @@ export default function Home() {
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen bg-gray-50">
+      <div className="min-h-screen bg-background">
         {/* Header */}
-        <header className="bg-white shadow-sm">
+        <header className="bg-surface border-b border-border">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
             <div className="flex justify-between items-center">
-              <h1 className="text-2xl font-bold text-gray-900">autoUSD</h1>
+              <Image
+                src="/LOGO.png"
+                alt="autoUSD"
+                width={120}
+                height={36}
+                priority
+              />
               <div className="flex items-center gap-4">
-                <button
+                <Button
                   onClick={() => setDepositModalOpen(true)}
-                  className="px-6 py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors text-lg"
+                  variant="primary"
+                  size="md"
                 >
-                  {userPosition?.balance && userPosition.balance > 0 ? 'Add Money' : 'Start Earning'}
-                </button>
-                {userPosition?.balance && userPosition.balance > 0 && (
-                  <button
+                  Deposit
+                </Button>
+                {userPosition?.balance && userPosition.balance > 0 ? (
+                  <Button
                     onClick={() => setWithdrawModalOpen(true)}
-                    className="px-4 py-3 text-gray-600 hover:text-gray-800 transition-colors"
+                    variant="ghost"
+                    size="md"
                   >
                     Withdraw
-                  </button>
-                )}
+                  </Button>
+                ) : null}
                 <div className="flex items-center gap-2">
-                  <span className="text-sm text-gray-700">{user?.email}</span>
-                  <button
+                  <span className="text-sm text-text-body">{user?.email}</span>
+                  <Button
                     onClick={logout}
-                    className="text-sm text-gray-700 hover:text-gray-900"
+                    variant="link"
+                    size="sm"
                   >
                     Sign Out
-                  </button>
+                  </Button>
                 </div>
               </div>
             </div>
@@ -138,7 +162,7 @@ export default function Home() {
         </header>
 
         {/* Main Content */}
-        <Dashboard />
+        <Dashboard onDepositClick={() => setDepositModalOpen(true)} />
 
         {/* Modals */}
         <ModalErrorBoundary>

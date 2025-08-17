@@ -7,16 +7,6 @@ import { Pausable } from "@openzeppelin/contracts/utils/Pausable.sol";
 import { AccessControl } from "@openzeppelin/contracts/access/AccessControl.sol";
 import { IMotherVault } from "../interfaces/IMotherVault.sol";
 
-interface IMotherVaultWithBuffer is IMotherVault {
-    function getDeployableAmount() external view returns (uint256);
-    function isBufferSufficient() external view returns (bool);
-}
-
-interface IMotherVaultWithRebalance is IMotherVault {
-    function initiateRebalance(uint32 sourceChainId, uint32 targetChainId, uint256 amount) external;
-    function deployToChildVault(uint32 domainId, uint256 amount) external;
-}
-
 contract Rebalancer is IRebalancer, ReentrancyGuard, Pausable, AccessControl {
     bytes32 public constant REBALANCER_ROLE = keccak256("REBALANCER_ROLE");
     bytes32 public constant METRICS_UPDATER_ROLE = keccak256("METRICS_UPDATER_ROLE");
@@ -43,7 +33,7 @@ contract Rebalancer is IRebalancer, ReentrancyGuard, Pausable, AccessControl {
         rebalanceConfig = RebalanceConfig({
             minAPYDifferentialBps: 100, // 1%
             maxRebalanceAmount: 1_000_000 * 1e6, // 1M USDC
-            minRebalanceAmount: 1_000 * 1e6, // 1k USDC
+            minRebalanceAmount: 1000 * 1e6, // 1k USDC
             rebalanceCooldown: 1 days,
             maxGasCostUSD: 50 * 1e6, // $50
             targetAllocationRatio: 0
@@ -60,16 +50,16 @@ contract Rebalancer is IRebalancer, ReentrancyGuard, Pausable, AccessControl {
 
     function evaluateRebalance() external view override returns (RebalanceDecision memory decision) {
         // First, check buffer sufficiency
-        if (!checkBufferBeforeRebalance()) {
+        if (!motherVault.isBufferSufficient()) {
             return RebalanceDecision(0, 0, 0, 0, 0, false, "Buffer insufficient");
         }
-        
+
         // Check if there are idle funds to deploy (above buffer requirement)
-        uint256 deployableAmount = getDeployableAmount();
+        uint256 deployableAmount = motherVault.getDeployableAmount();
         if (deployableAmount >= rebalanceConfig.minRebalanceAmount) {
             uint32 bestTargetChain = 0;
             uint256 bestApy = 0;
-            for (uint i = 0; i < activeChains.length; i++) {
+            for (uint256 i = 0; i < activeChains.length; i++) {
                 uint32 chainId = activeChains[i];
                 if (chainMetrics[chainId].currentAPY > bestApy) {
                     bestApy = chainMetrics[chainId].currentAPY;
@@ -77,10 +67,12 @@ contract Rebalancer is IRebalancer, ReentrancyGuard, Pausable, AccessControl {
                 }
             }
             if (bestTargetChain != 0) {
-                 return RebalanceDecision(
+                return RebalanceDecision(
                     0, // Source chain 0 indicates deploying idle funds
                     bestTargetChain,
-                    deployableAmount > rebalanceConfig.maxRebalanceAmount ? rebalanceConfig.maxRebalanceAmount : deployableAmount,
+                    deployableAmount > rebalanceConfig.maxRebalanceAmount
+                        ? rebalanceConfig.maxRebalanceAmount
+                        : deployableAmount,
                     bestApy,
                     0,
                     true,
@@ -88,7 +80,7 @@ contract Rebalancer is IRebalancer, ReentrancyGuard, Pausable, AccessControl {
                 );
             }
         }
-        
+
         uint256 chainsCount = activeChains.length;
         if (chainsCount < 2) {
             return RebalanceDecision(0, 0, 0, 0, 0, false, "Insufficient active chains");
@@ -99,7 +91,7 @@ contract Rebalancer is IRebalancer, ReentrancyGuard, Pausable, AccessControl {
         uint256 lowestApy = type(uint256).max;
         uint256 highestApy = 0;
 
-        for (uint i = 0; i < chainsCount; i++) {
+        for (uint256 i = 0; i < chainsCount; i++) {
             uint32 chainId = activeChains[i];
             ChainMetrics memory metrics = chainMetrics[chainId];
             if (metrics.currentAPY < lowestApy) {
@@ -116,16 +108,10 @@ contract Rebalancer is IRebalancer, ReentrancyGuard, Pausable, AccessControl {
             return RebalanceDecision(0, 0, 0, 0, 0, false, "No APY differential");
         }
 
-        uint256 apyDifferentialBps = (highestApy - lowestApy) * 10_000 / lowestApy;
+        uint256 apyDifferentialBps = ((highestApy - lowestApy) * 10_000) / lowestApy;
         if (apyDifferentialBps < rebalanceConfig.minAPYDifferentialBps) {
             return RebalanceDecision(
-                sourceChainId,
-                targetChainId,
-                0,
-                apyDifferentialBps,
-                0,
-                false,
-                "APY differential too low"
+                sourceChainId, targetChainId, 0, apyDifferentialBps, 0, false, "APY differential too low"
             );
         }
 
@@ -136,13 +122,7 @@ contract Rebalancer is IRebalancer, ReentrancyGuard, Pausable, AccessControl {
 
         if (amountToMove < rebalanceConfig.minRebalanceAmount) {
             return RebalanceDecision(
-                sourceChainId,
-                targetChainId,
-                amountToMove,
-                apyDifferentialBps,
-                0,
-                false,
-                "Amount too small"
+                sourceChainId, targetChainId, amountToMove, apyDifferentialBps, 0, false, "Amount too small"
             );
         }
 
@@ -182,7 +162,11 @@ contract Rebalancer is IRebalancer, ReentrancyGuard, Pausable, AccessControl {
         );
     }
 
-    function updateChainMetrics(uint32 chainId, uint256 apy, uint256 totalValue)
+    function updateChainMetrics(
+        uint32 chainId,
+        uint256 apy,
+        uint256 totalValue
+    )
         external
         override
         onlyRole(METRICS_UPDATER_ROLE)
@@ -207,7 +191,7 @@ contract Rebalancer is IRebalancer, ReentrancyGuard, Pausable, AccessControl {
     function getAllChainMetrics() external view override returns (ChainMetrics[] memory) {
         uint256 chainCount = activeChains.length;
         ChainMetrics[] memory allMetrics = new ChainMetrics[](chainCount);
-        for (uint i = 0; i < chainCount; i++) {
+        for (uint256 i = 0; i < chainCount; i++) {
             allMetrics[i] = chainMetrics[activeChains[i]];
         }
         return allMetrics;
@@ -220,8 +204,8 @@ contract Rebalancer is IRebalancer, ReentrancyGuard, Pausable, AccessControl {
         returns (uint32[] memory chainIds, uint256[] memory allocations)
     {
         uint256 totalAssets = 0;
-        uint chainCount = activeChains.length;
-        for (uint i = 0; i < chainCount; i++) {
+        uint256 chainCount = activeChains.length;
+        for (uint256 i = 0; i < chainCount; i++) {
             totalAssets += chainMetrics[activeChains[i]].deployedAmount;
         }
 
@@ -233,20 +217,20 @@ contract Rebalancer is IRebalancer, ReentrancyGuard, Pausable, AccessControl {
         allocations = new uint256[](chainCount);
 
         uint256 totalYield = 0;
-        for (uint i = 0; i < chainCount; i++) {
+        for (uint256 i = 0; i < chainCount; i++) {
             totalYield += chainMetrics[activeChains[i]].projectedYield;
         }
 
         if (totalYield == 0) {
             // If no yield, propose equal allocation
-            for (uint i = 0; i < chainCount; i++) {
+            for (uint256 i = 0; i < chainCount; i++) {
                 chainIds[i] = activeChains[i];
                 allocations[i] = (totalAssets * 1e18) / chainCount;
             }
             return (chainIds, allocations);
         }
 
-        for (uint i = 0; i < chainCount; i++) {
+        for (uint256 i = 0; i < chainCount; i++) {
             uint32 chainId = activeChains[i];
             chainIds[i] = chainId;
             allocations[i] = (chainMetrics[chainId].projectedYield * totalAssets * 1e18) / totalYield;
@@ -260,7 +244,9 @@ contract Rebalancer is IRebalancer, ReentrancyGuard, Pausable, AccessControl {
     }
 
     function updateRebalanceConfig(RebalanceConfig calldata newConfig) external override onlyRole(DEFAULT_ADMIN_ROLE) {
-        emit ConfigUpdated("minAPYDifferentialBps", rebalanceConfig.minAPYDifferentialBps, newConfig.minAPYDifferentialBps);
+        emit ConfigUpdated(
+            "minAPYDifferentialBps", rebalanceConfig.minAPYDifferentialBps, newConfig.minAPYDifferentialBps
+        );
         emit ConfigUpdated("maxRebalanceAmount", rebalanceConfig.maxRebalanceAmount, newConfig.maxRebalanceAmount);
         emit ConfigUpdated("minRebalanceAmount", rebalanceConfig.minRebalanceAmount, newConfig.minRebalanceAmount);
         emit ConfigUpdated("rebalanceCooldown", rebalanceConfig.rebalanceCooldown, newConfig.rebalanceCooldown);
@@ -295,10 +281,10 @@ contract Rebalancer is IRebalancer, ReentrancyGuard, Pausable, AccessControl {
         returns (bool)
     {
         require(decision.shouldExecute, "Decision not executable");
-        
+
         // Double-check buffer before execution
-        require(checkBufferBeforeRebalance(), "Buffer insufficient for execution");
-        
+        require(motherVault.isBufferSufficient(), "Buffer insufficient for execution");
+
         // Update last rebalance time
         _lastRebalanceTime = block.timestamp;
 
@@ -307,27 +293,20 @@ contract Rebalancer is IRebalancer, ReentrancyGuard, Pausable, AccessControl {
             uint256 maxDeployable = getDeployableAmount();
             uint256 actualAmount = decision.amountToMove > maxDeployable ? maxDeployable : decision.amountToMove;
             require(actualAmount > 0, "No deployable amount available");
-            
-            IMotherVaultWithRebalance(address(motherVault)).deployToChildVault(
-                decision.targetChainId,
-                actualAmount
-            );
+
+            motherVault.deployToChildVault(decision.targetChainId, actualAmount);
         } else {
             // Execute inter-chain rebalance through MotherVault
-            IMotherVaultWithRebalance(address(motherVault)).initiateRebalance(
-                decision.sourceChainId,
-                decision.targetChainId,
-                decision.amountToMove
-            );
+            motherVault.initiateRebalance(decision.sourceChainId, decision.targetChainId, decision.amountToMove);
         }
-        
+
         emit RebalanceTriggered(
-            decision.sourceChainId,
-            decision.targetChainId,
-            decision.amountToMove,
-            decision.expectedAPYImprovement
+            decision.sourceChainId, decision.targetChainId, decision.amountToMove, decision.expectedAPYImprovement
         );
-        
+
+        // Note: RebalanceCompleted event will be emitted by monitoring system
+        // once the cross-chain operation is confirmed complete
+
         return true;
     }
 
@@ -335,33 +314,56 @@ contract Rebalancer is IRebalancer, ReentrancyGuard, Pausable, AccessControl {
         uint32 sourceChain,
         uint32 targetChain,
         uint256 amount
-    ) public pure override returns (uint256 gasCostUSD) {
+    )
+        public
+        pure
+        override
+        returns (uint256 gasCostUSD)
+    {
         // Base cost for CCTP bridge + Hyperlane messaging
         uint256 baseCost = 10 * 1e6; // $10 base
-        
+
         // Additional cost based on amount (simulating gas scaling)
         uint256 amountFactor = (amount / 100_000e6); // per 100k USDC
         uint256 scaledCost = amountFactor * 2 * 1e6; // $2 per 100k
-        
+
         return baseCost + scaledCost;
     }
 
-    function emergencyRebalance(uint32 sourceChain, uint32 targetChain, uint256 amount)
+    function emergencyRebalance(
+        uint32 sourceChain,
+        uint32 targetChain,
+        uint256 amount
+    )
         external
         override
         onlyRole(DEFAULT_ADMIN_ROLE)
     {
-        IMotherVaultWithRebalance(address(motherVault)).initiateRebalance(sourceChain, targetChain, amount);
+        motherVault.initiateRebalance(sourceChain, targetChain, amount);
 
         emit RebalanceTriggered(sourceChain, targetChain, amount, 0);
     }
 
-    function getDeployableAmount() public view returns (uint256) {
-        return IMotherVaultWithBuffer(address(motherVault)).getDeployableAmount();
+    /**
+     * @notice Emit RebalanceCompleted event (called by monitoring system)
+     * @param sourceChain Source chain ID
+     * @param targetChain Target chain ID
+     * @param amount Amount rebalanced
+     * @param gasUsed Gas used for the operation
+     */
+    function emitRebalanceCompleted(
+        uint32 sourceChain,
+        uint32 targetChain,
+        uint256 amount,
+        uint256 gasUsed
+    )
+        external
+        onlyRole(METRICS_UPDATER_ROLE)
+    {
+        emit RebalanceCompleted(sourceChain, targetChain, amount, gasUsed);
     }
 
-    function checkBufferBeforeRebalance() internal view returns (bool) {
-        return IMotherVaultWithBuffer(address(motherVault)).isBufferSufficient();
+    function getDeployableAmount() public view returns (uint256) {
+        return motherVault.getDeployableAmount();
     }
 }
-

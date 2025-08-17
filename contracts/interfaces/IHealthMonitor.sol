@@ -6,7 +6,6 @@ pragma solidity 0.8.23;
  * @notice Interface for the HealthMonitor contract
  */
 interface IHealthMonitor {
-    
     struct VaultHealth {
         uint256 tvl;
         uint256 lastUpdate;
@@ -32,11 +31,13 @@ interface IHealthMonitor {
     }
 
     // Events
-    event HealthCheckCompleted(uint256 timestamp, bool systemHealthy, string status);
-    event VaultHealthUpdated(uint32 indexed domainId, bool isHealthy, string status);
-    event FailedOperationRecorded(string operationType, address contractAddress, string errorMessage);
-    event SystemMetricsUpdated(uint256 totalTVL, uint256 activeVaults, bool emergencyMode);
-    event ContractsUpdated(address motherVault, address crossChainMessenger, address rebalancer);
+    event HealthCheckCompleted(uint256 indexed timestamp, bool indexed systemHealthy, string status);
+    event VaultHealthUpdated(uint32 indexed domainId, bool indexed isHealthy, string status);
+    event FailedOperationRecorded(string indexed operationType, address indexed contractAddress, string errorMessage);
+    event SystemMetricsUpdated(uint256 indexed totalTVL, uint256 indexed activeVaults, bool indexed emergencyMode);
+    event ContractsUpdated(
+        address indexed motherVault, address indexed crossChainMessenger, address indexed rebalancer
+    );
 
     /**
      * @notice Get comprehensive system health status
@@ -74,7 +75,8 @@ interface IHealthMonitor {
         address contractAddress,
         string calldata errorMessage,
         bytes32 transactionHash
-    ) external;
+    )
+        external;
 
     /**
      * @notice Get recent failed operations
@@ -89,11 +91,10 @@ interface IHealthMonitor {
      * @return apyValues Array of APY values (in basis points)
      * @return lastUpdated Array of last update timestamps
      */
-    function getChildVaultAPYs() external view returns (
-        uint32[] memory domainIds,
-        uint256[] memory apyValues,
-        uint256[] memory lastUpdated
-    );
+    function getChildVaultAPYs()
+        external
+        view
+        returns (uint32[] memory domainIds, uint256[] memory apyValues, uint256[] memory lastUpdated);
 
     /**
      * @notice Get rebalancing metrics for admin dashboard
@@ -101,21 +102,17 @@ interface IHealthMonitor {
      * @return lastRebalanceTime Timestamp of last rebalance
      * @return cooldownRemaining Seconds remaining in cooldown period
      */
-    function getRebalancingMetrics() external view returns (
-        bool canRebalance,
-        uint256 lastRebalanceTime,
-        uint256 cooldownRemaining
-    );
+    function getRebalancingMetrics()
+        external
+        view
+        returns (bool canRebalance, uint256 lastRebalanceTime, uint256 cooldownRemaining);
 
     /**
      * @notice Manual health check trigger for admin use
      * @return systemHealthy Overall system health status
      * @return issues Array of detected issues
      */
-    function performManualHealthCheck() external returns (
-        bool systemHealthy,
-        string[] memory issues
-    );
+    function performManualHealthCheck() external returns (bool systemHealthy, string[] memory issues);
 
     /**
      * @notice Update contract addresses (admin only)
@@ -123,11 +120,7 @@ interface IHealthMonitor {
      * @param _crossChainMessenger New Cross Chain Messenger address
      * @param _rebalancer New Rebalancer address
      */
-    function updateContracts(
-        address _motherVault,
-        address _crossChainMessenger,
-        address _rebalancer
-    ) external;
+    function updateContracts(address _motherVault, address _crossChainMessenger, address _rebalancer) external;
 
     /**
      * @notice Get total number of failed operations

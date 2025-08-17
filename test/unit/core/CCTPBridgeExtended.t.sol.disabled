@@ -1,0 +1,577 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.23;
+
+import {Test, console2} from "forge-std/Test.sol";
+import {CCTPBridge} from "../../../contracts/core/CCTPBridge.sol";
+import {MockERC20} from "../../mocks/MockERC20.sol";
+import {MockTokenMessenger} from "../../mocks/MockTokenMessenger.sol";
+import {MockMessageTransmitter} from "../../mocks/MockMessageTransmitter.sol";
+import {IMotherVault} from "../../../contracts/interfaces/IMotherVault.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+
+// Mock contract that implements IMotherVault interface for CCTP callback testing
+contract MockVaultWithCallback is IMotherVault {
+    address public usdc;
+    bool public callbackCalled;
+    uint256 public receivedAmount;
+    uint32 public receivedDomain;
+    bytes32 public receivedHash;
+    
+    constructor(address _usdc) {
+        usdc = _usdc;
+    }
+    
+    function handleCCTPReceive(uint256 amount, uint32 sourceDomain, bytes32 messageHash) external {
+        callbackCalled = true;
+        receivedAmount = amount;
+        receivedDomain = sourceDomain;
+        receivedHash = messageHash;
+    }
+    
+    // Minimal implementations for interface compliance
+    function USDC() external view returns (IERC20) { return IERC20(usdc); }
+    function depositCap() external pure returns (uint256) { return 0; }
+    function totalDeployedAssets() external pure returns (uint256) { return 0; }
+    function getChildVault(uint32) external pure returns (ChildVault memory) { 
+        return ChildVault(0, address(0), 0, 0, 0, false); 
+    }
+    function getAllChildVaults() external pure returns (uint32[] memory, ChildVault[] memory) { 
+        return (new uint32[](0), new ChildVault[](0)); 
+    }
+    function addChildVault(uint32, address) external {}
+    function removeChildVault(uint32) external {}
+    function strategicDeploy(StrategicDeployParams calldata) external {}
+    function deployToChildVault(uint32, uint256) external {}
+    function initiateRebalance(uint32, uint32, uint256) external {}
+    function handleIncomingMessage(uint32, bytes32, bytes calldata) external {}
+    function reportYield(uint32, uint256, uint256) external {}
+    function emergencyPause() external {}
+    function emergencyUnpause() external {}
+    function emergencyWithdrawAll() external {}
+    function setDepositCap(uint256) external {}
+    function setManagementFee(uint256) external {}
+    function proposeManagementFeeUpdate(uint256) external {}
+    function executeManagementFeeUpdate() external {}
+    function getPendingFeeUpdate() external pure returns (PendingFeeUpdate memory) {
+        return PendingFeeUpdate(0, 0, false);
+    }
+    function canExecuteFeeUpdate() external pure returns (bool, uint256) { return (false, 0); }
+    function setFeeSink(address) external {}
+    function setRebalanceCooldown(uint256) external {}
+    function setMinAPYDifferential(uint256) external {}
+    function collectManagementFees() external pure returns (uint256) { return 0; }
+    function lastRebalanceTime() external pure returns (uint256) { return 0; }
+    function managementFeeBps() external pure returns (uint256) { return 0; }
+    function rebalanceCooldown() external pure returns (uint256) { return 0; }
+    function minAPYDifferential() external pure returns (uint256) { return 0; }
+    function feeSink() external pure returns (address) { return address(0); }
+    function isPaused() external pure returns (bool) { return false; }
+    function getRequiredBuffer() external pure returns (uint256) { return 0; }
+    function getCurrentBuffer() external pure returns (uint256) { return 0; }
+    function isBufferSufficient() external pure returns (bool) { return true; }
+    function getDeployableAmount() external pure returns (uint256) { return 0; }
+    function requestBufferRefill() external {}
+    function setBufferManagement(bool) external {}
+    function bufferManagementEnabled() external pure returns (bool) { return false; }
+    function reportHealthCheckFailure(string calldata, address) external {}
+    function getFeeGovernanceParams() external pure returns (uint256, uint256) { return (0, 0); }
+    
+    // ERC4626 functions
+    function asset() external view returns (address) { return usdc; }
+    function totalAssets() external pure returns (uint256) { return 0; }
+    function convertToShares(uint256) external pure returns (uint256) { return 0; }
+    function convertToAssets(uint256) external pure returns (uint256) { return 0; }
+    function maxDeposit(address) external pure returns (uint256) { return 0; }
+    function maxMint(address) external pure returns (uint256) { return 0; }
+    function maxWithdraw(address) external pure returns (uint256) { return 0; }
+    function maxRedeem(address) external pure returns (uint256) { return 0; }
+    function previewDeposit(uint256) external pure returns (uint256) { return 0; }
+    function previewMint(uint256) external pure returns (uint256) { return 0; }
+    function previewWithdraw(uint256) external pure returns (uint256) { return 0; }
+    function previewRedeem(uint256) external pure returns (uint256) { return 0; }
+    function deposit(uint256, address) external pure returns (uint256) { return 0; }
+    function mint(uint256, address) external pure returns (uint256) { return 0; }
+    function withdraw(uint256, address, address) external pure returns (uint256) { return 0; }
+    function redeem(uint256, address, address) external pure returns (uint256) { return 0; }
+    
+    // ERC20 functions
+    function totalSupply() external pure returns (uint256) { return 0; }
+    function balanceOf(address) external pure returns (uint256) { return 0; }
+    function transfer(address, uint256) external pure returns (bool) { return false; }
+    function allowance(address, address) external pure returns (uint256) { return 0; }
+    function approve(address, uint256) external pure returns (bool) { return false; }
+    function transferFrom(address, address, uint256) external pure returns (bool) { return false; }
+}
+
+/**
+ * @title CCTPBridgeExtendedTest
+ * @notice Extended test suite for CCTPBridge covering edge cases, error conditions, and governance
+ */
+contract CCTPBridgeExtendedTest is Test {
+    CCTPBridge public bridge;
+    MockERC20 public usdc;
+    MockTokenMessenger public tokenMessenger;
+    MockMessageTransmitter public messageTransmitter;
+    MockVaultWithCallback public vaultWithCallback;
+    
+    address public admin = address(0x1);
+    address public operator = address(0x2);
+    address public user = address(0x3);
+    address public recipient = address(0x4);
+    address public pauser = address(0x5);
+    address public retrier = address(0x6);
+    
+    uint256 public constant BASE_CHAIN_ID = 8453;
+    uint256 public constant ARBITRUM_CHAIN_ID = 42161;
+    uint256 public constant UNSUPPORTED_CHAIN_ID = 999;
+    uint32 public constant BASE_DOMAIN = 6;
+    uint32 public constant ARBITRUM_DOMAIN = 3;
+    uint32 public constant UNSUPPORTED_DOMAIN = 999;
+    
+    // Events
+    event BridgeInitiated(uint64 indexed nonce, uint256 amount, uint32 destinationDomain, address indexed recipient, address indexed sender);
+    event BridgeCompleted(bytes32 indexed messageHash, uint256 amount, uint32 sourceDomain, address indexed recipient);
+    event BridgeFailed(uint64 indexed nonce);
+    event BridgeTimedOut(uint64 indexed nonce, uint256 indexed timeout);
+    event BridgeRetryScheduled(uint64 indexed nonce, uint256 indexed attempt, uint256 indexed nextRetryTime);
+    event DomainConfigured(uint256 indexed chainId, uint32 indexed domain, bool indexed supported);
+    event BridgeLimitsUpdated(uint256 indexed minAmount, uint256 indexed maxAmount);
+    
+    function setUp() public {
+        usdc = new MockERC20("USD Coin", "USDC", 6);
+        tokenMessenger = new MockTokenMessenger(address(usdc));
+        messageTransmitter = new MockMessageTransmitter();
+        vaultWithCallback = new MockVaultWithCallback(address(usdc));
+        
+        bridge = new CCTPBridge(
+            address(tokenMessenger),
+            address(messageTransmitter),
+            address(usdc),
+            admin
+        );
+        
+        // Set up roles
+        vm.startPrank(admin);
+        bridge.grantRole(bridge.PAUSER_ROLE(), pauser);
+        bridge.grantRole(bridge.RETRIER_ROLE(), retrier);
+        vm.stopPrank();
+        
+        usdc.mint(user, 1_000_000e6);
+        usdc.mint(address(bridge), 100_000e6);
+        usdc.mint(address(vaultWithCallback), 500_000e6);
+    }
+
+    // ===============================
+    // Constructor and Configuration Tests
+    // ===============================
+
+    function test_Constructor_InvalidAddresses() public {
+        vm.expectRevert("Invalid TokenMessenger");
+        new CCTPBridge(address(0), address(messageTransmitter), address(usdc), admin);
+        
+        vm.expectRevert("Invalid MessageTransmitter");
+        new CCTPBridge(address(tokenMessenger), address(0), address(usdc), admin);
+        
+        vm.expectRevert("Invalid USDC");
+        new CCTPBridge(address(tokenMessenger), address(messageTransmitter), address(0), admin);
+        
+        vm.expectRevert("Invalid admin");
+        new CCTPBridge(address(tokenMessenger), address(messageTransmitter), address(usdc), address(0));
+    }
+
+    function test_SetSupportedDomain() public {
+        uint32 newDomain = 999;
+        uint256 chainId = 1234;
+        
+        vm.expectEmit(true, true, true, true);
+        emit DomainConfigured(0, newDomain, true); // chainId will be 0 since no mapping exists
+        
+        vm.prank(admin);
+        bridge.setSupportedDomain(newDomain, true);
+        
+        assertTrue(bridge.supportedDomains(newDomain));
+    }
+
+    function test_SetSupportedDomain_OnlyAdmin() public {
+        vm.prank(user);
+        vm.expectRevert();
+        bridge.setSupportedDomain(999, true);
+    }
+
+    function test_SetBridgeLimits() public {
+        uint256 newMin = 5e6; // 5 USDC
+        uint256 newMax = 50000e6; // 50k USDC
+        
+        vm.expectEmit(true, true, false, true);
+        emit BridgeLimitsUpdated(newMin, newMax);
+        
+        vm.prank(admin);
+        bridge.setBridgeLimits(newMin, newMax);
+        
+        assertEq(bridge.minBridgeAmount(), newMin);
+        assertEq(bridge.maxBridgeAmount(), newMax);
+    }
+
+    function test_SetBridgeLimits_InvalidLimits() public {
+        vm.prank(admin);
+        vm.expectRevert("Invalid limits");
+        bridge.setBridgeLimits(1000e6, 500e6); // min > max
+    }
+
+    function test_SetBridgeLimits_OnlyAdmin() public {
+        vm.prank(user);
+        vm.expectRevert();
+        bridge.setBridgeLimits(1e6, 10000e6);
+    }
+
+    // ===============================
+    // Bridge Validation Tests
+    // ===============================
+
+    function test_BridgeUSDC_AmountTooLow() public {
+        uint256 tooLowAmount = bridge.minBridgeAmount() - 1;
+        
+        vm.startPrank(user);
+        usdc.approve(address(bridge), tooLowAmount);
+        
+        vm.expectRevert(abi.encodeWithSelector(CCTPBridge.AmountTooLow.selector, tooLowAmount));
+        bridge.bridgeUSDC(tooLowAmount, ARBITRUM_CHAIN_ID, recipient);
+        vm.stopPrank();
+    }
+
+    function test_BridgeUSDC_AmountTooHigh() public {
+        uint256 tooHighAmount = bridge.maxBridgeAmount() + 1;
+        
+        vm.startPrank(user);
+        usdc.approve(address(bridge), tooHighAmount);
+        
+        vm.expectRevert(abi.encodeWithSelector(CCTPBridge.AmountTooHigh.selector, tooHighAmount));
+        bridge.bridgeUSDC(tooHighAmount, ARBITRUM_CHAIN_ID, recipient);
+        vm.stopPrank();
+    }
+
+    function test_BridgeUSDC_InvalidRecipient() public {
+        uint256 amount = 100e6;
+        
+        vm.startPrank(user);
+        usdc.approve(address(bridge), amount);
+        
+        vm.expectRevert(abi.encodeWithSelector(CCTPBridge.InvalidRecipient.selector, address(0)));
+        bridge.bridgeUSDC(amount, ARBITRUM_CHAIN_ID, address(0));
+        vm.stopPrank();
+    }
+
+    function test_BridgeUSDC_UnsupportedDomain() public {
+        uint256 amount = 100e6;
+        
+        vm.startPrank(user);
+        usdc.approve(address(bridge), amount);
+        
+        vm.expectRevert(abi.encodeWithSelector(CCTPBridge.InvalidDomain.selector, bridge.chainToDomain(UNSUPPORTED_CHAIN_ID)));
+        bridge.bridgeUSDC(amount, UNSUPPORTED_CHAIN_ID, recipient);
+        vm.stopPrank();
+    }
+
+    function test_BridgeUSDC_InsufficientAllowance() public {
+        uint256 amount = 100e6;
+        
+        vm.startPrank(user);
+        usdc.approve(address(bridge), amount - 1);
+        
+        vm.expectRevert();
+        bridge.bridgeUSDC(amount, ARBITRUM_CHAIN_ID, recipient);
+        vm.stopPrank();
+    }
+
+    function test_BridgeUSDC_InsufficientBalance() public {
+        uint256 amount = usdc.balanceOf(user) + 1;
+        
+        vm.startPrank(user);
+        usdc.approve(address(bridge), amount);
+        
+        vm.expectRevert();
+        bridge.bridgeUSDC(amount, ARBITRUM_CHAIN_ID, recipient);
+        vm.stopPrank();
+    }
+
+    // ===============================
+    // Message Handling Tests
+    // ===============================
+
+    function test_HandleReceiveMessage_CallbackSuccess() public {
+        uint256 amount = 500e6;
+        bytes32 messageHash = keccak256("test message");
+        
+        // Create a CCTP message body
+        bytes memory messageBody = abi.encode(CCTPBridge.CCTPMessage({
+            version: 0,
+            sourceDomain: ARBITRUM_DOMAIN,
+            destinationDomain: BASE_DOMAIN,
+            nonce: 1,
+            sender: bytes32(uint256(uint160(address(0x100)))),
+            recipient: bytes32(uint256(uint160(address(vaultWithCallback)))),
+            destinationCaller: bytes32(0),
+            amount: amount
+        }));
+        
+        uint256 recipientBalanceBefore = usdc.balanceOf(address(vaultWithCallback));
+        
+        vm.expectEmit(true, true, true, true);
+        emit BridgeCompleted(keccak256(messageBody), amount, ARBITRUM_DOMAIN, address(vaultWithCallback));
+        
+        vm.prank(address(tokenMessenger));
+        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        
+        assertEq(usdc.balanceOf(address(vaultWithCallback)), recipientBalanceBefore + amount);
+        assertTrue(vaultWithCallback.callbackCalled());
+        assertEq(vaultWithCallback.receivedAmount(), amount);
+        assertEq(vaultWithCallback.receivedDomain(), ARBITRUM_DOMAIN);
+        assertEq(vaultWithCallback.receivedHash(), keccak256(messageBody));
+    }
+
+    function test_HandleReceiveMessage_OnlyTokenMessenger() public {
+        bytes memory messageBody = abi.encode(CCTPBridge.CCTPMessage({
+            version: 0,
+            sourceDomain: ARBITRUM_DOMAIN,
+            destinationDomain: BASE_DOMAIN,
+            nonce: 1,
+            sender: bytes32(uint256(uint160(address(0x100)))),
+            recipient: bytes32(uint256(uint160(recipient))),
+            destinationCaller: bytes32(0),
+            amount: 100e6
+        }));
+        
+        vm.prank(user);
+        vm.expectRevert("Only TokenMessenger");
+        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+    }
+
+    function test_HandleReceiveMessage_UnsupportedDomain() public {
+        bytes memory messageBody = abi.encode(CCTPBridge.CCTPMessage({
+            version: 0,
+            sourceDomain: UNSUPPORTED_DOMAIN,
+            destinationDomain: BASE_DOMAIN,
+            nonce: 1,
+            sender: bytes32(uint256(uint160(address(0x100)))),
+            recipient: bytes32(uint256(uint160(recipient))),
+            destinationCaller: bytes32(0),
+            amount: 100e6
+        }));
+        
+        vm.prank(address(tokenMessenger));
+        vm.expectRevert("Unsupported source domain");
+        bridge.handleReceiveMessage(UNSUPPORTED_DOMAIN, bytes32(0), messageBody);
+    }
+
+    function test_HandleReceiveMessage_DuplicateMessage() public {
+        bytes memory messageBody = abi.encode(CCTPBridge.CCTPMessage({
+            version: 0,
+            sourceDomain: ARBITRUM_DOMAIN,
+            destinationDomain: BASE_DOMAIN,
+            nonce: 1,
+            sender: bytes32(uint256(uint160(address(0x100)))),
+            recipient: bytes32(uint256(uint160(recipient))),
+            destinationCaller: bytes32(0),
+            amount: 100e6
+        }));
+        
+        bytes32 messageHash = keccak256(messageBody);
+        
+        // Process message first time
+        vm.prank(address(tokenMessenger));
+        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+        
+        // Try to process same message again
+        vm.prank(address(tokenMessenger));
+        vm.expectRevert(abi.encodeWithSelector(CCTPBridge.MessageAlreadyProcessed.selector, messageHash));
+        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), messageBody);
+    }
+
+    // ===============================
+    // Retry Mechanism Tests
+    // ===============================
+
+    function test_RetryBridge_TransferNotPending() public {
+        uint64 nonExistentNonce = 999;
+        
+        vm.prank(retrier);
+        vm.expectRevert(abi.encodeWithSelector(CCTPBridge.TransferNotPending.selector, nonExistentNonce));
+        bridge.retryBridge(nonExistentNonce);
+    }
+
+    function test_RetryBridge_OnlyRetrier() public {
+        vm.prank(user);
+        vm.expectRevert();
+        bridge.retryBridge(1);
+    }
+
+    function test_CanRetryBridge_NonExistent() public {
+        (bool canRetry, uint256 timeUntilRetry) = bridge.canRetryBridge(999);
+        assertFalse(canRetry);
+        assertEq(timeUntilRetry, 0);
+    }
+
+    // ===============================
+    // Getter Function Tests
+    // ===============================
+
+    function test_GetUserFailedBridges() public {
+        uint64[] memory failedBridges = bridge.getUserFailedBridges(user);
+        assertEq(failedBridges.length, 0);
+    }
+
+    function test_GetBridgeRetryConfiguration() public {
+        (uint256[] memory delays, uint256 maxRetries, uint256 timeout) = bridge.getBridgeRetryConfiguration();
+        assertTrue(delays.length > 0);
+        assertTrue(maxRetries > 0);
+        assertTrue(timeout > 0);
+    }
+
+    // ===============================
+    // Pausable Tests
+    // ===============================
+
+    function test_Pause() public {
+        vm.prank(pauser);
+        bridge.pause();
+        
+        assertTrue(bridge.paused());
+        
+        // Should not be able to bridge when paused
+        vm.startPrank(user);
+        usdc.approve(address(bridge), 100e6);
+        vm.expectRevert("Pausable: paused");
+        bridge.bridgeUSDC(100e6, ARBITRUM_CHAIN_ID, recipient);
+        vm.stopPrank();
+    }
+
+    function test_Unpause() public {
+        vm.prank(pauser);
+        bridge.pause();
+        
+        vm.prank(pauser);
+        bridge.unpause();
+        
+        assertFalse(bridge.paused());
+    }
+
+    function test_Pause_OnlyPauser() public {
+        vm.prank(user);
+        vm.expectRevert();
+        bridge.pause();
+    }
+
+    // ===============================
+    // Access Control Tests
+    // ===============================
+
+    function test_GrantRole() public {
+        address newPauser = address(0x999);
+        
+        vm.prank(admin);
+        bridge.grantRole(bridge.PAUSER_ROLE(), newPauser);
+        
+        assertTrue(bridge.hasRole(bridge.PAUSER_ROLE(), newPauser));
+    }
+
+    function test_RevokeRole() public {
+        vm.prank(admin);
+        bridge.revokeRole(bridge.PAUSER_ROLE(), pauser);
+        
+        assertFalse(bridge.hasRole(bridge.PAUSER_ROLE(), pauser));
+    }
+
+    // ===============================
+    // Edge Cases and Boundary Tests
+    // ===============================
+
+    function testFuzz_BridgeUSDC_ValidAmounts(uint256 amount) public {
+        amount = bound(amount, bridge.minBridgeAmount(), bridge.maxBridgeAmount());
+        
+        vm.startPrank(user);
+        usdc.approve(address(bridge), amount);
+        
+        uint64 nonce = bridge.bridgeUSDC(amount, ARBITRUM_CHAIN_ID, recipient);
+        assertTrue(nonce > 0);
+        vm.stopPrank();
+    }
+
+    function testFuzz_SetBridgeLimits_Valid(uint256 min, uint256 max) public {
+        vm.assume(min <= max && max <= type(uint128).max);
+        
+        vm.prank(admin);
+        bridge.setBridgeLimits(min, max);
+        
+        assertEq(bridge.minBridgeAmount(), min);
+        assertEq(bridge.maxBridgeAmount(), max);
+    }
+
+    function test_BridgeUSDC_ExactLimits() public {
+        uint256 minAmount = bridge.minBridgeAmount();
+        uint256 maxAmount = bridge.maxBridgeAmount();
+        
+        // Test exact minimum
+        vm.startPrank(user);
+        usdc.approve(address(bridge), minAmount);
+        uint64 nonce1 = bridge.bridgeUSDC(minAmount, ARBITRUM_CHAIN_ID, recipient);
+        assertTrue(nonce1 > 0);
+        
+        // Test exact maximum
+        usdc.approve(address(bridge), maxAmount);
+        uint64 nonce2 = bridge.bridgeUSDC(maxAmount, ARBITRUM_CHAIN_ID, recipient);
+        assertTrue(nonce2 > nonce1);
+        vm.stopPrank();
+    }
+
+    // ===============================
+    // Integration Test Scenarios
+    // ===============================
+
+    function test_FullBridgeFlow_WithCallback() public {
+        uint256 bridgeAmount = 1000e6;
+        
+        // Step 1: Bridge USDC to another chain
+        vm.startPrank(user);
+        usdc.approve(address(bridge), bridgeAmount);
+        uint64 nonce = bridge.bridgeUSDC(bridgeAmount, ARBITRUM_CHAIN_ID, address(vaultWithCallback));
+        vm.stopPrank();
+        
+        // Step 2: Simulate receiving message back
+        bytes memory returnMessage = abi.encode(CCTPBridge.CCTPMessage({
+            version: 0,
+            sourceDomain: ARBITRUM_DOMAIN,
+            destinationDomain: BASE_DOMAIN,
+            nonce: nonce,
+            sender: bytes32(uint256(uint160(address(vaultWithCallback)))),
+            recipient: bytes32(uint256(uint160(address(vaultWithCallback)))),
+            destinationCaller: bytes32(0),
+            amount: bridgeAmount + 50e6 // Include some yield
+        }));
+        
+        vm.prank(address(tokenMessenger));
+        bridge.handleReceiveMessage(ARBITRUM_DOMAIN, bytes32(0), returnMessage);
+        
+        // Verify callback was called with correct parameters
+        assertTrue(vaultWithCallback.callbackCalled());
+        assertEq(vaultWithCallback.receivedAmount(), bridgeAmount + 50e6);
+        assertEq(vaultWithCallback.receivedDomain(), ARBITRUM_DOMAIN);
+    }
+
+    function test_MultipleSimultaneousBridges() public {
+        uint256 amount1 = 100e6;
+        uint256 amount2 = 200e6;
+        uint256 amount3 = 300e6;
+        
+        vm.startPrank(user);
+        usdc.approve(address(bridge), amount1 + amount2 + amount3);
+        
+        uint64 nonce1 = bridge.bridgeUSDC(amount1, ARBITRUM_CHAIN_ID, recipient);
+        uint64 nonce2 = bridge.bridgeUSDC(amount2, ARBITRUM_CHAIN_ID, recipient);
+        uint64 nonce3 = bridge.bridgeUSDC(amount3, ARBITRUM_CHAIN_ID, recipient);
+        
+        vm.stopPrank();
+        
+        assertTrue(nonce1 < nonce2);
+        assertTrue(nonce2 < nonce3);
+    }
+}

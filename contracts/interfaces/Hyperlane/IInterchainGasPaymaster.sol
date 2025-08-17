@@ -19,7 +19,9 @@ interface IInterchainGasPaymaster {
         uint32 destinationDomain,
         uint256 gasAmount,
         address refundAddress
-    ) external payable;
+    )
+        external
+        payable;
 
     /**
      * @notice Quote the gas payment required
@@ -27,15 +29,7 @@ interface IInterchainGasPaymaster {
      * @param gasAmount The amount of destination gas
      * @return The payment required in wei
      */
-    function quoteGasPayment(
-        uint32 destinationDomain,
-        uint256 gasAmount
-    ) external view returns (uint256);
+    function quoteGasPayment(uint32 destinationDomain, uint256 gasAmount) external view returns (uint256);
 
-    event GasPayment(
-        bytes32 indexed messageId,
-        uint32 indexed destinationDomain,
-        uint256 gasAmount,
-        uint256 payment
-    );
+    event GasPayment(bytes32 indexed messageId, uint32 indexed destinationDomain, uint256 gasAmount, uint256 payment);
 }

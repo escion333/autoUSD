@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
-import {ReentrancyGuard} from "openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
-import {AccessControl} from "openzeppelin-contracts/contracts/access/AccessControl.sol";
+import { IERC20 } from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import { ReentrancyGuard } from "openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
+import { AccessControl } from "openzeppelin-contracts/contracts/access/AccessControl.sol";
 
 /// @title YieldDistributor
 /// @author NORA AI
@@ -44,11 +44,7 @@ contract YieldDistributor is ReentrancyGuard, AccessControl {
 
     /// @notice Emitted when a harvest has been processed and recorded.
     event HarvestRecorded(
-        uint256 indexed timestamp,
-        uint256 grossYield,
-        uint256 managementFees,
-        uint256 netYield,
-        uint256 newTotalNav
+        uint256 indexed timestamp, uint256 grossYield, uint256 managementFees, uint256 netYield, uint256 newTotalNav
     );
 
     /// @notice Emitted when the treasury address is updated.
@@ -69,16 +65,12 @@ contract YieldDistributor is ReentrancyGuard, AccessControl {
     /// @param _motherVault The address of the MotherVault contract.
     /// @param _treasury The address of the protocol treasury.
     /// @param _managementFeeBps The initial management fee in basis points.
-    constructor(
-        address _usdc,
-        address _motherVault,
-        address _treasury,
-        uint256 _managementFeeBps
-    ) {
+    constructor(address _usdc, address _motherVault, address _treasury, uint256 _managementFeeBps) {
         if (_usdc == address(0) || _motherVault == address(0) || _treasury == address(0)) {
             revert InvalidAddress("Zero address provided");
         }
-        if (_managementFeeBps > 10000) { // 100%
+        if (_managementFeeBps > 10_000) {
+            // 100%
             revert InvalidFee("Fee cannot exceed 100%");
         }
 
@@ -106,13 +98,14 @@ contract YieldDistributor is ReentrancyGuard, AccessControl {
     /// @notice Updates the management fee.
     /// @param _newFeeBps The new fee in basis points.
     function setManagementFee(uint256 _newFeeBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (_newFeeBps > 10000) { // Max 100%
+        if (_newFeeBps > 10_000) {
+            // Max 100%
             revert InvalidFee("Fee cannot exceed 100%");
         }
         managementFeeBps = _newFeeBps;
         emit ManagementFeeUpdated(_newFeeBps);
     }
-    
+
     /// @notice Sets the initial NAV. Can only be called once by the admin.
     /// @param _initialNav The initial NAV of the MotherVault.
     function setInitialNav(uint256 _initialNav) external onlyRole(DEFAULT_ADMIN_ROLE) {
@@ -126,12 +119,8 @@ contract YieldDistributor is ReentrancyGuard, AccessControl {
     /// @param _grossYield The total yield generated before any fees.
     /// @return managementFee The portion of the yield allocated as management fees.
     /// @return netYield The portion of the yield remaining after fees.
-    function calculateFees(uint256 _grossYield)
-        public
-        view
-        returns (uint256 managementFee, uint256 netYield)
-    {
-        managementFee = (_grossYield * managementFeeBps) / 10000;
+    function calculateFees(uint256 _grossYield) public view returns (uint256 managementFee, uint256 netYield) {
+        managementFee = (_grossYield * managementFeeBps) / 10_000;
         netYield = _grossYield - managementFee;
         return (managementFee, netYield);
     }
@@ -141,7 +130,10 @@ contract YieldDistributor is ReentrancyGuard, AccessControl {
     /// distributed the fees. It updates the performance history and state variables.
     /// @param _grossYield The gross yield generated during the cycle.
     /// @param _newTotalNav The new total NAV of the MotherVault after the harvest and fee distribution.
-    function recordHarvest(uint256 _grossYield, uint256 _newTotalNav)
+    function recordHarvest(
+        uint256 _grossYield,
+        uint256 _newTotalNav
+    )
         external
         nonReentrant
         onlyRole(MOTHER_VAULT_ROLE)

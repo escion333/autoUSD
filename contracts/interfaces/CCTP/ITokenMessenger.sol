@@ -20,7 +20,9 @@ interface ITokenMessenger {
         uint32 destinationDomain,
         bytes32 mintRecipient,
         address burnToken
-    ) external returns (uint64 nonce);
+    )
+        external
+        returns (uint64 nonce);
 
     /**
      * @notice Replace a burn message to change the mint recipient or destination caller
@@ -34,7 +36,8 @@ interface ITokenMessenger {
         bytes calldata originalAttestation,
         bytes32 newDestinationCaller,
         bytes32 newMintRecipient
-    ) external;
+    )
+        external;
 
     /**
      * @notice Get the maximum burn amount per message

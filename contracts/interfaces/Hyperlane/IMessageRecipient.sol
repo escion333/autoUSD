@@ -13,9 +13,5 @@ interface IMessageRecipient {
      * @param _sender The sender address on the origin chain (bytes32 format)
      * @param _message The message body
      */
-    function handle(
-        uint32 _origin,
-        bytes32 _sender,
-        bytes calldata _message
-    ) external payable;
+    function handle(uint32 _origin, bytes32 _sender, bytes calldata _message) external payable;
 }

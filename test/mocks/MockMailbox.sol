@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {IMailbox} from "../../contracts/interfaces/Hyperlane/IMailbox.sol";
+import { IMailbox } from "../../contracts/interfaces/Hyperlane/IMailbox.sol";
 
 contract MockMailbox is IMailbox {
     uint256 private quoteDispatchAmount;
@@ -16,27 +16,16 @@ contract MockMailbox is IMailbox {
         nextMessageId = messageId;
     }
 
-    function dispatch(
-        uint32,
-        bytes32,
-        bytes calldata
-    ) external payable override returns (bytes32) {
+    function dispatch(uint32, bytes32, bytes calldata) external payable override returns (bytes32) {
         require(msg.value >= quoteDispatchAmount, "Insufficient payment");
         return nextMessageId != bytes32(0) ? nextMessageId : keccak256(abi.encode(block.timestamp));
     }
 
-    function quoteDispatch(
-        uint32,
-        bytes32,
-        bytes calldata
-    ) external view override returns (uint256) {
+    function quoteDispatch(uint32, bytes32, bytes calldata) external view override returns (uint256) {
         return quoteDispatchAmount;
     }
 
-    function process(
-        bytes calldata,
-        bytes calldata
-    ) external pure override {
+    function process(bytes calldata, bytes calldata) external pure override {
         // Mock implementation
     }
 

@@ -2,9 +2,9 @@
 pragma solidity 0.8.23;
 
 import { Test, console } from "forge-std/Test.sol";
-import { Rebalancer } from "../contracts/core/Rebalancer.sol";
-import { IRebalancer } from "../contracts/interfaces/IRebalancer.sol";
-import { MockMotherVault } from "./mocks/MockMotherVault.sol";
+import { Rebalancer } from "../../../contracts/core/Rebalancer.sol";
+import { IRebalancer } from "../../../contracts/interfaces/IRebalancer.sol";
+import { MockMotherVault } from "../../mocks/MockMotherVault.sol";
 
 contract RebalancerTest is Test {
     Rebalancer public rebalancer;
@@ -24,7 +24,9 @@ contract RebalancerTest is Test {
         randomUser = makeAddr("randomUser");
 
         vm.startPrank(admin);
-        mockMotherVault = new MockMotherVault();
+        // Create a mock USDC token first
+        address mockUsdc = makeAddr("mockUsdc");
+        mockMotherVault = new MockMotherVault(mockUsdc);
         rebalancer = new Rebalancer(address(mockMotherVault));
 
         rebalancer.grantRole(rebalancer.REBALANCER_ROLE(), rebalancerRoleHolder);
@@ -43,21 +45,29 @@ contract RebalancerTest is Test {
 
     function test_AdminFunctionsFailWithoutAdminRole() public {
         IRebalancer.RebalanceConfig memory config = rebalancer.getRebalanceConfig();
-        
+
         vm.startPrank(randomUser);
-        vm.expectRevert(abi.encodeWithSignature("AccessControlUnauthorizedAccount(address,bytes32)", randomUser, rebalancer.DEFAULT_ADMIN_ROLE()));
+        vm.expectRevert(
+            abi.encodeWithSignature(
+                "AccessControlUnauthorizedAccount(address,bytes32)", randomUser, rebalancer.DEFAULT_ADMIN_ROLE()
+            )
+        );
         rebalancer.updateRebalanceConfig(config);
-        vm.expectRevert(abi.encodeWithSignature("AccessControlUnauthorizedAccount(address,bytes32)", randomUser, rebalancer.DEFAULT_ADMIN_ROLE()));
+        vm.expectRevert(
+            abi.encodeWithSignature(
+                "AccessControlUnauthorizedAccount(address,bytes32)", randomUser, rebalancer.DEFAULT_ADMIN_ROLE()
+            )
+        );
         rebalancer.emergencyRebalance(1, 2, 1000);
         vm.stopPrank();
     }
 
     function test_UpdateConfig() public {
-        vm.startPrank(admin);  // Use admin who has DEFAULT_ADMIN_ROLE
+        vm.startPrank(admin); // Use admin who has DEFAULT_ADMIN_ROLE
         IRebalancer.RebalanceConfig memory newConfig = IRebalancer.RebalanceConfig({
             minAPYDifferentialBps: 200,
             maxRebalanceAmount: 2_000_000 * 1e6,
-            minRebalanceAmount: 2_000 * 1e6,
+            minRebalanceAmount: 2000 * 1e6,
             rebalanceCooldown: 2 days,
             maxGasCostUSD: 100 * 1e6,
             targetAllocationRatio: 0
@@ -66,7 +76,7 @@ contract RebalancerTest is Test {
         IRebalancer.RebalanceConfig memory updatedConfig = rebalancer.getRebalanceConfig();
         assertEq(updatedConfig.minAPYDifferentialBps, 200);
         assertEq(updatedConfig.maxRebalanceAmount, 2_000_000 * 1e6);
-        assertEq(updatedConfig.minRebalanceAmount, 2_000 * 1e6);
+        assertEq(updatedConfig.minRebalanceAmount, 2000 * 1e6);
         assertEq(updatedConfig.rebalanceCooldown, 2 days);
         assertEq(updatedConfig.maxGasCostUSD, 100 * 1e6);
         vm.stopPrank();

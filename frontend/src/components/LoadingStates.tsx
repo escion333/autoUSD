@@ -6,13 +6,13 @@ interface SkeletonProps {
 
 export function Skeleton({ className = '' }: SkeletonProps) {
   return (
-    <div className={`animate-pulse bg-gray-200 rounded ${className}`} />
+    <div className={`animate-pulse bg-mist rounded ${className}`} />
   );
 }
 
 export function BalanceCardSkeleton() {
   return (
-    <div className="bg-white rounded-xl shadow-sm p-6">
+    <div className="bg-surface rounded-xl shadow-sm border border-border p-6">
       <Skeleton className="h-4 w-24 mb-3" />
       <Skeleton className="h-8 w-32 mb-2" />
       <Skeleton className="h-3 w-20" />
@@ -22,7 +22,7 @@ export function BalanceCardSkeleton() {
 
 export function ChartSkeleton() {
   return (
-    <div className="bg-white rounded-xl shadow-sm p-6">
+    <div className="bg-surface rounded-xl shadow-sm border border-border p-6">
       <div className="flex justify-between items-center mb-4">
         <Skeleton className="h-6 w-32" />
         <div className="flex gap-2">
@@ -38,7 +38,7 @@ export function ChartSkeleton() {
 
 export function TransactionRowSkeleton() {
   return (
-    <div className="flex items-center justify-between py-3 border-b border-gray-100">
+    <div className="flex items-center justify-between py-3 border-b border-border">
       <div className="flex items-center gap-3">
         <Skeleton className="h-10 w-10 rounded-full" />
         <div>
@@ -56,7 +56,7 @@ export function TransactionRowSkeleton() {
 
 export function DashboardSkeleton() {
   return (
-    <div className="min-h-screen bg-gray-50 p-4 md:p-6 lg:p-8">
+    <div className="min-h-screen bg-background p-4 md:p-6 lg:p-8">
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="mb-8">
@@ -78,7 +78,7 @@ export function DashboardSkeleton() {
             <ChartSkeleton />
           </div>
           <div>
-            <div className="bg-white rounded-xl shadow-sm p-6">
+            <div className="bg-surface rounded-xl shadow-sm border border-border p-6">
               <Skeleton className="h-6 w-32 mb-4" />
               <Skeleton className="h-48 w-48 rounded-full mx-auto mb-4" />
               <div className="space-y-2">
@@ -91,7 +91,7 @@ export function DashboardSkeleton() {
         </div>
 
         {/* Transaction History */}
-        <div className="bg-white rounded-xl shadow-sm p-6">
+        <div className="bg-surface rounded-xl shadow-sm border border-border p-6">
           <Skeleton className="h-6 w-48 mb-4" />
           <div className="space-y-1">
             <TransactionRowSkeleton />

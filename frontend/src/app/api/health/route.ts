@@ -13,6 +13,7 @@ export async function GET() {
         customer: '/api/fern/customer',
         quote: '/api/fern/quote',
         transaction: '/api/fern/transaction',
+        'purchase-status': '/api/fern/purchase-status',
         'retry-auto-deposit': '/api/fern/retry-auto-deposit',
       },
       wallet: {

@@ -1,0 +1,230 @@
+name: Deploy to Testnet
+
+on:
+  workflow_dispatch:
+    inputs:
+      network:
+        description: 'Target network'
+        required: true
+        default: 'base_sepolia'
+        type: choice
+        options:
+          - base_sepolia
+          - sepolia
+      confirm_deployment:
+        description: 'Type "CONFIRM" to proceed with deployment'
+        required: true
+        type: string
+
+env:
+  FOUNDRY_PROFILE: default
+
+jobs:
+  pre-deployment-checks:
+    name: Pre-deployment Validation
+    runs-on: ubuntu-latest
+    outputs:
+      can-deploy: ${{ steps.validation.outputs.can-deploy }}
+    
+    steps:
+      - name: Validate confirmation
+        if: github.event.inputs.confirm_deployment != 'CONFIRM'
+        run: |
+          echo "❌ Deployment not confirmed. Please type 'CONFIRM' to proceed."
+          exit 1
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Build contracts
+        run: forge build
+
+      - name: Run tests
+        run: |
+          forge test --match-path "test/unit/*"
+          forge test --match-path "test/integration/*"
+
+      - name: Check test coverage
+        run: |
+          coverage=$(forge coverage --report summary | tail -1 | awk '{print $4}' | sed 's/%//')
+          echo "Test coverage: ${coverage}%"
+          if (( $(echo "$coverage < 80" | bc -l) )); then
+            echo "❌ Test coverage too low: ${coverage}% (minimum: 80%)"
+            exit 1
+          fi
+          echo "✅ Test coverage sufficient: ${coverage}%"
+
+      - name: Security check
+        run: |
+          echo "Running basic security checks..."
+          # Check for hardcoded addresses in deployment scripts
+          if grep -r "0x[a-fA-F0-9]\{40\}" script/deploy/ | grep -v "address(0)"; then
+            echo "⚠️ Found hardcoded addresses in deployment scripts"
+          fi
+
+      - name: Validate environment configuration
+        id: validation
+        env:
+          PRIVATE_KEY: ${{ secrets.DEPLOYER_PRIVATE_KEY }}
+          USDC_ADDRESS: ${{ vars.USDC_ADDRESS_TESTNET }}
+          HYPERLANE_MAILBOX: ${{ vars.HYPERLANE_MAILBOX_TESTNET }}
+          CCTP_TOKEN_MESSENGER: ${{ vars.CCTP_TOKEN_MESSENGER_TESTNET }}
+          CCTP_MESSAGE_TRANSMITTER: ${{ vars.CCTP_MESSAGE_TRANSMITTER_TESTNET }}
+          INTERCHAIN_GAS_PAYMASTER: ${{ vars.INTERCHAIN_GAS_PAYMASTER_TESTNET }}
+          BASE_DOMAIN: 84532
+          KATANA_DOMAIN: 1001
+          ZIRCUIT_DOMAIN: 48900
+          DEPOSIT_CAP: 100000000  # $100 for testnet
+          MANAGEMENT_FEE: 50      # 0.5%
+          PERFORMANCE_FEE: 1000   # 10%
+          REBALANCE_THRESHOLD: 500 # 5%
+          BASESCAN_API_KEY: ${{ secrets.BASESCAN_API_KEY }}
+          ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
+        run: |
+          echo "Validating deployment configuration..."
+          
+          # Test environment validation script
+          if forge script script/deploy/ValidateEnvironment.s.sol --fork-url ${{ secrets.BASE_SEPOLIA_RPC_URL }} --silent; then
+            echo "✅ Environment validation passed"
+            echo "can-deploy=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Environment validation failed"
+            echo "can-deploy=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+  deploy:
+    name: Deploy to ${{ github.event.inputs.network }}
+    runs-on: ubuntu-latest
+    needs: pre-deployment-checks
+    if: needs.pre-deployment-checks.outputs.can-deploy == 'true'
+    
+    environment: 
+      name: testnet-${{ github.event.inputs.network }}
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Set network variables
+        run: |
+          case "${{ github.event.inputs.network }}" in
+            "base_sepolia")
+              echo "RPC_URL=${{ secrets.BASE_SEPOLIA_RPC_URL }}" >> $GITHUB_ENV
+              echo "CHAIN_ID=84532" >> $GITHUB_ENV
+              echo "EXPLORER_API_KEY=${{ secrets.BASESCAN_API_KEY }}" >> $GITHUB_ENV
+              ;;
+            "sepolia")
+              echo "RPC_URL=${{ secrets.SEPOLIA_RPC_URL }}" >> $GITHUB_ENV
+              echo "CHAIN_ID=11155111" >> $GITHUB_ENV
+              echo "EXPLORER_API_KEY=${{ secrets.ETHERSCAN_API_KEY }}" >> $GITHUB_ENV
+              ;;
+          esac
+
+      - name: Deploy contracts
+        env:
+          PRIVATE_KEY: ${{ secrets.DEPLOYER_PRIVATE_KEY }}
+          USDC_ADDRESS: ${{ vars.USDC_ADDRESS_TESTNET }}
+          HYPERLANE_MAILBOX: ${{ vars.HYPERLANE_MAILBOX_TESTNET }}
+          CCTP_TOKEN_MESSENGER: ${{ vars.CCTP_TOKEN_MESSENGER_TESTNET }}
+          CCTP_MESSAGE_TRANSMITTER: ${{ vars.CCTP_MESSAGE_TRANSMITTER_TESTNET }}
+          INTERCHAIN_GAS_PAYMASTER: ${{ vars.INTERCHAIN_GAS_PAYMASTER_TESTNET }}
+          BASE_DOMAIN: 84532
+          KATANA_DOMAIN: 1001
+          ZIRCUIT_DOMAIN: 48900
+          DEPOSIT_CAP: 100000000
+          MANAGEMENT_FEE: 50
+          PERFORMANCE_FEE: 1000
+          REBALANCE_THRESHOLD: 500
+          BASESCAN_API_KEY: ${{ secrets.BASESCAN_API_KEY }}
+          ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
+        run: |
+          echo "🚀 Starting deployment to ${{ github.event.inputs.network }}..."
+          
+          # Run pre-deployment validation
+          forge script script/deploy/ValidateEnvironment.s.sol \
+            --fork-url $RPC_URL \
+            --broadcast
+
+          # Deploy main contracts
+          forge script script/deploy/Deploy.s.sol \
+            --rpc-url $RPC_URL \
+            --broadcast \
+            --verify \
+            --retries 3 \
+            --delay 10
+
+      - name: Save deployment artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: deployment-${{ github.event.inputs.network }}-${{ github.sha }}
+          path: |
+            deployments/
+            broadcast/
+          retention-days: 30
+
+      - name: Create deployment summary
+        run: |
+          echo "# Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Network:** ${{ github.event.inputs.network }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Chain ID:** $CHAIN_ID" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployer:** $(cast wallet address --private-key $PRIVATE_KEY)" >> $GITHUB_STEP_SUMMARY
+          echo "**Timestamp:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f "deployments/${{ github.event.inputs.network }}.env" ]; then
+            echo "## Deployed Contracts" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            cat "deployments/${{ github.event.inputs.network }}.env" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Comment on PR (if applicable)
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            let comment = `## 🚀 Testnet Deployment Complete\n\n`;
+            comment += `**Network:** ${{ github.event.inputs.network }}\n`;
+            comment += `**Chain ID:** ${process.env.CHAIN_ID}\n`;
+            comment += `**Commit:** ${context.sha.slice(0, 7)}\n\n`;
+            
+            if (fs.existsSync('deployments/${{ github.event.inputs.network }}.env')) {
+              const deployment = fs.readFileSync('deployments/${{ github.event.inputs.network }}.env', 'utf8');
+              comment += `### Deployed Contracts\n\`\`\`\n${deployment}\n\`\`\`\n`;
+            }
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+  notify:
+    name: Deployment Notification
+    runs-on: ubuntu-latest
+    needs: [pre-deployment-checks, deploy]
+    if: always()
+    
+    steps:
+      - name: Notify Success
+        if: needs.deploy.result == 'success'
+        run: |
+          echo "✅ Deployment to ${{ github.event.inputs.network }} completed successfully!"
+          
+      - name: Notify Failure
+        if: needs.deploy.result == 'failure' || needs.pre-deployment-checks.result == 'failure'
+        run: |
+          echo "❌ Deployment to ${{ github.event.inputs.network }} failed!"
+          exit 1

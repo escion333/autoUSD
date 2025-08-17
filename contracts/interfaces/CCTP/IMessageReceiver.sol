@@ -13,9 +13,5 @@ interface IMessageReceiver {
      * @param remoteTokenMessenger The address of the TokenMessenger on the source chain
      * @param message The message body, containing details of the transfer
      */
-    function handleReceiveMessage(
-        uint32 remoteDomain,
-        bytes32 remoteTokenMessenger,
-        bytes calldata message
-    ) external;
+    function handleReceiveMessage(uint32 remoteDomain, bytes32 remoteTokenMessenger, bytes calldata message) external;
 }

@@ -11,6 +11,18 @@ remappings = [
     "forge-std/=lib/forge-std/src/"
 ]
 
+[profile.quick]
+src = "contracts"
+out = "out"
+libs = ["lib"]
+solc = "0.8.23"
+optimizer = false
+via_ir = false
+remappings = [
+    "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+    "forge-std/=lib/forge-std/src/"
+]
+
 [etherscan]
 base = { key = "${BASESCAN_API_KEY}" }
 base_sepolia = { key = "${BASESCAN_API_KEY}" }
@@ -27,7 +39,14 @@ override_spacing = true
 
 [profile.ci]
 fuzz = { runs = 10000 }
-invariant = { runs = 256 }
+invariant = { runs = 1000, depth = 50, fail_on_revert = false }
+
+[profile.intensive]
+fuzz = { runs = 50000 }
+invariant = { runs = 10000, depth = 100, fail_on_revert = false }
+
+[profile.coverage]
+via_ir = true
 
 [rpc_endpoints]
 base = "${BASE_RPC_URL}"

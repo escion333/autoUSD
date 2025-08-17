@@ -13,11 +13,7 @@ interface IKatanaRouter {
         uint256 deadline
     )
         external
-        returns (
-            uint256 amountA,
-            uint256 amountB,
-            uint256 liquidity
-        );
+        returns (uint256 amountA, uint256 amountB, uint256 liquidity);
 
     function removeLiquidity(
         address tokenA,
@@ -27,7 +23,9 @@ interface IKatanaRouter {
         uint256 amountBMin,
         address to,
         uint256 deadline
-    ) external returns (uint256 amountA, uint256 amountB);
+    )
+        external
+        returns (uint256 amountA, uint256 amountB);
 
     function swapExactTokensForTokens(
         uint256 amountIn,
@@ -35,11 +33,16 @@ interface IKatanaRouter {
         address[] calldata path,
         address to,
         uint256 deadline
-    ) external returns (uint256[] memory amounts);
+    )
+        external
+        returns (uint256[] memory amounts);
 
     function WETH() external view returns (address);
 
-    function getAmountsOut(uint256 amountIn, address[] calldata path)
+    function getAmountsOut(
+        uint256 amountIn,
+        address[] calldata path
+    )
         external
         view
         returns (uint256[] memory amounts);

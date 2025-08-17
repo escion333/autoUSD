@@ -84,12 +84,12 @@ export function WithdrawModal({ isOpen, onClose, onSuccess }: WithdrawModalProps
   return (
     <>
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg p-8 max-w-md w-full mx-4">
+      <div className="bg-white rounded-xl p-8 max-w-md w-full mx-4 shadow-lg">
         <div className="flex justify-between items-center mb-6">
-          <h2 className="text-2xl font-bold text-gray-900">Withdraw USDC</h2>
+          <h2 className="text-2xl font-heading font-semibold text-text-title">Withdraw USDC</h2>
           <button
             onClick={onClose}
-            className="text-gray-700 hover:text-gray-800"
+            className="text-text-muted hover:text-text-body transition-colors"
             disabled={isLoading}
           >
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -100,19 +100,19 @@ export function WithdrawModal({ isOpen, onClose, onSuccess }: WithdrawModalProps
 
         <form onSubmit={handleSubmit}>
           {/* Balance Display */}
-          <div className="mb-4 p-4 bg-gray-50 rounded-lg">
+          <div className="mb-4 p-4 bg-surface rounded-lg border border-border">
             <div className="flex justify-between items-center mb-2">
-              <span className="text-sm text-gray-700">Available Balance</span>
-              <span className="text-lg font-bold text-gray-900">{formatUSDC(currentBalance)}</span>
+              <span className="text-sm text-text-muted">Available Balance</span>
+              <span className="text-lg font-bold text-text-title">{formatUSDC(currentBalance)}</span>
             </div>
             <div className="flex justify-between items-center">
-              <span className="text-sm text-gray-700">Total Earnings</span>
-              <span className="text-sm font-medium text-green-600">+{formatUSDC(totalEarnings)}</span>
+              <span className="text-sm text-text-muted">Total Earnings</span>
+              <span className="text-sm font-medium text-success">+{formatUSDC(totalEarnings)}</span>
             </div>
           </div>
 
           <div className="mb-4">
-            <label htmlFor="amount" className="block text-sm font-medium text-gray-900 mb-2">
+            <label htmlFor="amount" className="block text-sm font-medium text-text-title mb-2">
               Amount to Withdraw
             </label>
             <div className="relative">
@@ -121,7 +121,7 @@ export function WithdrawModal({ isOpen, onClose, onSuccess }: WithdrawModalProps
                 id="amount"
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
-                className="w-full px-4 py-2 pr-16 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="w-full px-4 py-2 pr-16 border border-border rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
                 placeholder="0.00"
                 step="0.01"
                 min="0"
@@ -132,7 +132,7 @@ export function WithdrawModal({ isOpen, onClose, onSuccess }: WithdrawModalProps
               <button
                 type="button"
                 onClick={handleMax}
-                className="absolute right-2 top-1/2 -translate-y-1/2 px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded-md transition-colors"
+                className="absolute right-2 top-1/2 -translate-y-1/2 px-3 py-1 text-sm bg-primary-subtle hover:bg-primary/10 text-primary font-medium rounded-md transition-colors"
                 disabled={isLoading || currentBalance === 0}
               >
                 MAX
@@ -147,7 +147,7 @@ export function WithdrawModal({ isOpen, onClose, onSuccess }: WithdrawModalProps
                 key={percentage}
                 type="button"
                 onClick={() => handlePercentage(percentage)}
-                className="flex-1 py-2 text-sm bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                className="flex-1 py-2 text-sm bg-mist hover:bg-primary-subtle text-text-body font-medium rounded-lg transition-colors hover:text-primary"
                 disabled={isLoading || currentBalance === 0}
               >
                 {percentage}%
@@ -157,37 +157,37 @@ export function WithdrawModal({ isOpen, onClose, onSuccess }: WithdrawModalProps
 
           {/* Withdrawal Info */}
           {amount && parseFloat(amount) > 0 && (
-            <div className="mb-4 p-4 bg-blue-50 rounded-lg">
-              <h3 className="text-sm font-medium text-blue-900 mb-2">Withdrawal Details</h3>
+            <div className="mb-4 p-4 bg-primary-subtle rounded-lg border border-primary/20">
+              <h3 className="text-sm font-medium text-primary mb-2">Withdrawal Details</h3>
               <div className="space-y-1">
                 <div className="flex justify-between text-sm">
-                  <span className="text-blue-700">Withdraw Amount:</span>
-                  <span className="font-medium text-blue-900">{formatUSDC(parseFloat(amount))}</span>
+                  <span className="text-text-muted">Withdraw Amount:</span>
+                  <span className="font-medium text-text-title">{formatUSDC(parseFloat(amount))}</span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-blue-700">Remaining Balance:</span>
-                  <span className="font-medium text-blue-900">
+                  <span className="text-text-muted">Remaining Balance:</span>
+                  <span className="font-medium text-text-title">
                     {formatUSDC(currentBalance - parseFloat(amount))}
                   </span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-blue-700">Processing Time:</span>
-                  <span className="font-medium text-blue-900">~2-5 minutes</span>
+                  <span className="text-text-muted">Processing Time:</span>
+                  <span className="font-medium text-text-title">~2-5 minutes</span>
                 </div>
               </div>
             </div>
           )}
 
           {error && (
-            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
-              <p className="text-sm text-red-600">{error}</p>
+            <div className="mb-4 p-3 bg-error-subtle border border-error/20 rounded-lg">
+              <p className="text-sm text-error">{error}</p>
             </div>
           )}
 
           <button
             type="submit"
             disabled={isLoading || !amount || parseFloat(amount) <= 0 || parseFloat(amount) > currentBalance}
-            className="w-full py-3 px-4 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
+            className="w-full py-3 px-4 bg-primary text-white rounded-lg font-medium hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-fast flex items-center justify-center gap-2 shadow-sm hover:shadow-md"
           >
             {isLoading ? (
               <>
@@ -199,7 +199,7 @@ export function WithdrawModal({ isOpen, onClose, onSuccess }: WithdrawModalProps
             )}
           </button>
 
-          <p className="mt-4 text-center text-xs text-gray-700">
+          <p className="mt-4 text-center text-xs text-text-muted">
             Withdrawals are processed on Base L2 • No gas fees
           </p>
         </form>

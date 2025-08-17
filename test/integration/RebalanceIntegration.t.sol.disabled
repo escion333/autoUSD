@@ -1,0 +1,214 @@
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.13;
+
+import "forge-std/Test.sol";
+import "test/mocks/MockTokenMessenger.sol";
+import "test/mocks/MockMessageTransmitter.sol";
+import "test/mocks/MockMailbox.sol";
+import "test/mocks/MockERC20.sol";
+import "test/mocks/MockInterchainGasPaymaster.sol";
+import "contracts/MotherVault.sol";
+import "contracts/core/Rebalancer.sol";
+import "contracts/core/CCTPBridge.sol";
+import "contracts/core/CrossChainMessenger.sol";
+import "contracts/yield-strategies/KatanaChildVault.sol";
+import "contracts/yield-strategies/ZircuitChildVault.sol";
+
+contract RebalanceIntegrationTest is Test {
+    // CCTP Mocks
+    MockTokenMessenger mockTokenMessenger;
+    MockMessageTransmitter mockMessageTransmitter;
+
+    // Hyperlane Mocks
+    MockMailbox mockMailbox;
+
+    // Token
+    MockERC20 usdc;
+
+    // Core Contracts
+    MotherVault motherVault;
+    Rebalancer rebalancer;
+    CCTPBridge cctpBridge;
+    CrossChainMessenger crossChainMessenger;
+
+    // Child Vaults
+    KatanaChildVault katanaVault;
+    ZircuitChildVault zircuitVault;
+
+    // Users
+    address alice = makeAddr("alice");
+
+    // Domain IDs
+    uint32 constant DOMAIN_MOTHER = 1;
+    uint32 constant DOMAIN_KATANA = 2;
+    uint32 constant DOMAIN_ZIRCUIT = 3;
+
+        function setUp() public {
+        // Users
+        address admin = makeAddr("admin");
+        vm.prank(admin);
+
+        // 1. Deploy Mocks and Token
+        usdc = new MockERC20("USD Coin", "USDC", 6);
+        mockTokenMessenger = new MockTokenMessenger(address(usdc));
+        mockMessageTransmitter = new MockMessageTransmitter();
+        mockMailbox = new MockMailbox();
+        MockInterchainGasPaymaster mockGasPaymaster = new MockInterchainGasPaymaster();
+
+        // 2. Deploy Core Contracts
+        motherVault = new MotherVault(address(usdc), "Mother USDC", "mUSDC");
+        cctpBridge = new CCTPBridge(address(mockTokenMessenger), address(mockMessageTransmitter), address(usdc), admin);
+        crossChainMessenger = new CrossChainMessenger(address(mockMailbox), address(mockGasPaymaster), address(cctpBridge), address(motherVault), admin);
+        rebalancer = new Rebalancer(address(motherVault));
+
+        // 3. Initialize MotherVault
+        usdc.mint(admin, 100 * 1e6);
+        usdc.approve(address(motherVault), 100 * 1e6);
+        motherVault.initialize(address(crossChainMessenger), address(cctpBridge));
+
+        // 4. Deploy Child Vaults
+        katanaVault = new KatanaChildVault(address(usdc), "Katana Vault", "kUSD");
+        zircuitVault = new ZircuitChildVault(address(usdc), "Zircuit Vault", "zUSD");
+
+        // 5. Configure Contracts
+        motherVault.grantRole(motherVault.REBALANCER_ROLE(), address(rebalancer));
+        motherVault.addChildVault(DOMAIN_KATANA, address(katanaVault));
+        motherVault.addChildVault(DOMAIN_ZIRCUIT, address(zircuitVault));
+
+        // 6. Fund User
+        usdc.mint(alice, 1_000_000 * 1e6);
+        vm.stopPrank();
+    }
+
+    function test_EndToEnd_DepositViaMessenger() public {
+        // 1. Alice deposits 100,000 USDC into MotherVault for Katana Vault
+        uint256 depositAmount = 100_000 * 1e6;
+        vm.startPrank(alice);
+        usdc.approve(address(motherVault), depositAmount);
+        motherVault.deposit(depositAmount, DOMAIN_KATANA);
+        vm.stopPrank();
+
+        // Assert initial deposit state
+        assertEq(usdc.balanceOf(address(motherVault)), depositAmount);
+        assertEq(motherVault.balanceOf(alice), depositAmount);
+        assertEq(motherVault.totalAssets(), depositAmount);
+
+        // 2. Simulate Hyperlane message delivery for deposit request
+        mockMailbox.processNextInboundMessage();
+
+        // 3. The CrossChainMessenger initiates a CCTP transfer.
+        bytes memory cctpMessage = mockMessageTransmitter.getLastMessage();
+
+        // 4. Simulate CCTP message arrival on the destination chain.
+        usdc.mint(address(cctpBridge), depositAmount);
+        cctpBridge.handleCCTPReceive(cctpMessage);
+
+        // 5. Assert final state
+        assertEq(usdc.balanceOf(address(motherVault)), 0, "MotherVault should have bridged the funds");
+        assertEq(usdc.balanceOf(address(cctpBridge)), 0, "CCTPBridge should have forwarded the funds");
+        assertEq(usdc.balanceOf(address(katanaVault)), depositAmount, "KatanaVault should have received the funds");
+        assertEq(motherVault.totalAssets(), depositAmount, "Total assets should remain correct");
+        (uint256 katanaAssets, ) = motherVault.childVaults(DOMAIN_KATANA);
+        assertEq(katanaAssets, depositAmount, "KatanaVault asset accounting should be correct");
+    }
+
+    function test_EndToEnd_Rebalance() public {
+        // SETUP:
+        // 1. Deposit 200k to Katana, 300k to Zircuit
+        uint256 katanaDeposit = 200_000 * 1e6;
+        uint256 zircuitDeposit = 300_000 * 1e6;
+        uint256 totalDeposits = katanaDeposit + zircuitDeposit;
+
+        vm.startPrank(alice);
+        usdc.approve(address(motherVault), totalDeposits);
+        motherVault.deposit(katanaDeposit, DOMAIN_KATANA);
+        // Simulate cross-chain deposit to Katana
+        mockMailbox.processNextInboundMessage();
+        bytes memory cctpMessageKatana = mockMessageTransmitter.getLastMessage();
+        usdc.mint(address(cctpBridge), katanaDeposit);
+        cctpBridge.handleCCTPReceive(cctpMessageKatana);
+
+        motherVault.deposit(zircuitDeposit, DOMAIN_ZIRCUIT);
+        // Simulate cross-chain deposit to Zircuit
+        mockMailbox.processNextInboundMessage();
+        bytes memory cctpMessageZircuit = mockMessageTransmitter.getLastMessage();
+        usdc.mint(address(cctpBridge), zircuitDeposit);
+        cctpBridge.handleCCTPReceive(cctpMessageZircuit);
+        vm.stopPrank();
+
+        assertEq(usdc.balanceOf(address(katanaVault)), katanaDeposit);
+        assertEq(usdc.balanceOf(address(zircuitVault)), zircuitDeposit);
+        assertEq(motherVault.totalAssets(), totalDeposits);
+
+        // 2. Set APYs to make Katana the worst and Zircuit the best
+        motherVault.setChildVaultAPY(DOMAIN_KATANA, 1000); // 10%
+        motherVault.setChildVaultAPY(DOMAIN_ZIRCUIT, 2000); // 20%
+
+        // EXECUTION:
+        // 3. Trigger rebalance and expect event
+        vm.expectEmit(true, true, true, true, address(rebalancer));
+        emit Rebalancer.RebalanceInitiated(DOMAIN_KATANA, DOMAIN_ZIRCUIT, katanaDeposit);
+        rebalancer.rebalance();
+
+        // 4. Simulate withdrawal from worst vault (Katana)
+        mockMailbox.processNextInboundMessage(); // Rebalancer -> Katana to withdraw
+        bytes memory cctpWithdrawMessage = mockMessageTransmitter.getLastMessage(); // Katana -> MotherVault CCTP
+
+        // 5. Simulate funds arriving back at MotherVault
+        usdc.mint(address(cctpBridge), katanaDeposit);
+        cctpBridge.handleCCTPReceive(cctpWithdrawMessage);
+
+        // ASSERT Intermediate State:
+        (uint256 katanaAssets, ) = motherVault.childVaults(DOMAIN_KATANA);
+        assertEq(katanaAssets, 0, "Katana assets should be 0 after withdrawal");
+        assertEq(usdc.balanceOf(address(motherVault)), katanaDeposit, "MotherVault should hold the withdrawn funds");
+
+        // 6. Simulate deployment to best vault (Zircuit)
+        mockMailbox.processNextInboundMessage(); // Rebalancer -> Zircuit to deposit
+        bytes memory cctpDeployMessage = mockMessageTransmitter.getLastMessage(); // MotherVault -> Zircuit CCTP
+
+        // 7. Simulate funds arriving at Zircuit vault
+        usdc.mint(address(cctpBridge), katanaDeposit);
+        cctpBridge.handleCCTPReceive(cctpDeployMessage);
+
+        // ASSERT Final State:
+        (uint256 finalKatanaAssets, ) = motherVault.childVaults(DOMAIN_KATANA);
+        (uint256 finalZircuitAssets, ) = motherVault.childVaults(DOMAIN_ZIRCUIT);
+
+        assertEq(usdc.balanceOf(address(motherVault)), 0, "MotherVault should have no USDC left");
+        assertEq(usdc.balanceOf(address(katanaVault)), 0, "KatanaVault should be empty");
+        assertEq(usdc.balanceOf(address(zircuitVault)), totalDeposits, "ZircuitVault should hold all assets");
+        assertEq(finalKatanaAssets, 0, "MotherVault accounting for Katana should be 0");
+        assertEq(finalZircuitAssets, totalDeposits, "MotherVault accounting for Zircuit should be total assets");
+        assertEq(motherVault.totalAssets(), totalDeposits, "Total assets should remain unchanged");
+    }
+
+    function test_EndToEnd_WithdrawalViaMessenger() public {
+        // Setup: Deposit funds first
+        uint256 depositAmount = 100_000 * 1e6;
+        test_EndToEnd_DepositViaMessenger();
+
+        // 1. Alice withdraws 100,000 USDC from Katana Vault via MotherVault
+        vm.startPrank(alice);
+        motherVault.withdraw(depositAmount, DOMAIN_KATANA, alice);
+        vm.stopPrank();
+
+        // 2. Simulate Hyperlane message for withdrawal request
+        mockMailbox.processNextInboundMessage();
+
+        // 3. ChildVault initiates CCTP transfer back to MotherVault
+        bytes memory cctpMessage = mockMessageTransmitter.getLastMessage();
+
+        // 4. Simulate CCTP message arrival back on the mother chain
+        usdc.mint(address(cctpBridge), depositAmount);
+        cctpBridge.handleCCTPReceive(cctpMessage);
+
+        // 5. Assert final state
+        assertEq(usdc.balanceOf(address(katanaVault)), 0, "KatanaVault should have sent the funds back");
+        assertEq(usdc.balanceOf(alice), 1_000_000 * 1e6, "Alice should have received her USDC back");
+        assertEq(motherVault.totalAssets(), 0, "Total assets should be 0");
+        assertEq(motherVault.balanceOf(alice), 0, "Alice's share balance should be 0");
+        (uint256 katanaAssets, ) = motherVault.childVaults(DOMAIN_KATANA);
+        assertEq(katanaAssets, 0, "KatanaVault asset accounting should be 0");
+    }
+}

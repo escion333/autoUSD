@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {Test, console2} from "forge-std/Test.sol";
-import {CrossChainMessenger} from "../contracts/core/CrossChainMessenger.sol";
-import {CCTPBridge} from "../contracts/core/CCTPBridge.sol";
-import {ICrossChainMessenger} from "../contracts/interfaces/ICrossChainMessenger.sol";
-import {IMessageRecipient} from "../contracts/interfaces/Hyperlane/IMessageRecipient.sol";
-import {MockERC20} from "./mocks/MockERC20.sol";
-import {MockMailbox} from "./mocks/MockMailbox.sol";
-import {MockInterchainGasPaymaster} from "./mocks/MockInterchainGasPaymaster.sol";
-import {MockTokenMessenger} from "./mocks/MockTokenMessenger.sol";
-import {MockMessageTransmitter} from "./mocks/MockMessageTransmitter.sol";
-import {MockMotherVault} from "./mocks/MockMotherVault.sol";
+import { Test, console2 } from "forge-std/Test.sol";
+import { CrossChainMessenger } from "../../../contracts/core/CrossChainMessenger.sol";
+import { CCTPBridge } from "../../../contracts/core/CCTPBridge.sol";
+import { ICrossChainMessenger } from "../../../contracts/interfaces/ICrossChainMessenger.sol";
+import { IMessageRecipient } from "../../../contracts/interfaces/Hyperlane/IMessageRecipient.sol";
+import { MockERC20 } from "../../mocks/MockERC20.sol";
+import { MockMailbox } from "../../mocks/MockMailbox.sol";
+import { MockInterchainGasPaymaster } from "../../mocks/MockInterchainGasPaymaster.sol";
+import { MockTokenMessenger } from "../../mocks/MockTokenMessenger.sol";
+import { MockMessageTransmitter } from "../../mocks/MockMessageTransmitter.sol";
+import { MockMotherVault } from "../../mocks/MockMotherVault.sol";
 
 contract CrossChainMessengerTest is Test {
     CrossChainMessenger public messenger;
@@ -28,11 +28,15 @@ contract CrossChainMessengerTest is Test {
     address public user = address(0x3);
 
     uint32 public constant BASE_DOMAIN = 8453;
-    uint32 public constant ARBITRUM_DOMAIN = 42161;
+    uint32 public constant ARBITRUM_DOMAIN = 42_161;
     bytes32 public constant TRUSTED_SENDER = bytes32(uint256(uint160(address(0x4))));
 
-    event MessageSent(uint32 indexed targetChainId, ICrossChainMessenger.MessageType messageType, bytes32 messageId, uint256 nonce);
-    event MessageReceived(uint32 indexed originChainId, ICrossChainMessenger.MessageType messageType, bytes32 messageId, uint256 nonce);
+    event MessageSent(
+        uint32 indexed targetChainId, ICrossChainMessenger.MessageType messageType, bytes32 messageId, uint256 nonce
+    );
+    event MessageReceived(
+        uint32 indexed originChainId, ICrossChainMessenger.MessageType messageType, bytes32 messageId, uint256 nonce
+    );
     event MessageProcessed(bytes32 indexed messageId, bool success, bytes returnData);
     event TrustedSenderSet(uint32 indexed domain, bytes32 indexed sender);
 
@@ -43,23 +47,14 @@ contract CrossChainMessengerTest is Test {
         gasPaymaster = new MockInterchainGasPaymaster();
         tokenMessenger = new MockTokenMessenger(address(usdc));
         messageTransmitter = new MockMessageTransmitter();
-        motherVault = new MockMotherVault();
+        motherVault = new MockMotherVault(address(usdc));
 
         // Deploy CCTP Bridge
-        cctpBridge = new CCTPBridge(
-            address(tokenMessenger),
-            address(messageTransmitter),
-            address(usdc),
-            admin
-        );
+        cctpBridge = new CCTPBridge(address(tokenMessenger), address(messageTransmitter), address(usdc), admin);
 
         // Deploy CrossChainMessenger
         messenger = new CrossChainMessenger(
-            address(mailbox),
-            address(gasPaymaster),
-            address(cctpBridge),
-            address(motherVault),
-            admin
+            address(mailbox), address(gasPaymaster), address(cctpBridge), address(motherVault), admin
         );
 
         // Setup
@@ -100,9 +95,9 @@ contract CrossChainMessengerTest is Test {
 
         bytes32 expectedMessageId = keccak256(abi.encode("message"));
         mailbox.setNextMessageId(expectedMessageId);
-        
+
         // Just verify the message is sent successfully without checking exact event params
-        bytes32 messageId = messenger.sendCrossChainMessage{value: gasPayment}(message);
+        bytes32 messageId = messenger.sendCrossChainMessage{ value: gasPayment }(message);
         assertEq(messageId, expectedMessageId);
 
         vm.stopPrank();
@@ -111,7 +106,7 @@ contract CrossChainMessengerTest is Test {
     function test_SendCrossChainMessage_RevertMessageTooLarge() public {
         vm.startPrank(admin);
 
-        bytes memory largePayload = new bytes(11000); // > MAX_MESSAGE_SIZE
+        bytes memory largePayload = new bytes(11_000); // > MAX_MESSAGE_SIZE
         ICrossChainMessenger.CrossChainMessage memory message = ICrossChainMessenger.CrossChainMessage({
             targetChainId: ARBITRUM_DOMAIN,
             targetVault: childVault,
@@ -121,7 +116,7 @@ contract CrossChainMessengerTest is Test {
             timestamp: block.timestamp
         });
 
-        vm.expectRevert(abi.encodeWithSelector(CrossChainMessenger.MessageTooLarge.selector, 11000));
+        vm.expectRevert(abi.encodeWithSelector(CrossChainMessenger.MessageTooLarge.selector, 11_000));
         messenger.sendCrossChainMessage(message);
 
         vm.stopPrank();
@@ -160,8 +155,10 @@ contract CrossChainMessengerTest is Test {
         uint256 gasPayment = 1000;
         uint256 incorrectPayment = 500;
 
-        vm.expectRevert(abi.encodeWithSelector(CrossChainMessenger.InsufficientGasPayment.selector, gasPayment, incorrectPayment));
-        messenger.sendCrossChainMessage{value: incorrectPayment}(message);
+        vm.expectRevert(
+            abi.encodeWithSelector(CrossChainMessenger.InsufficientGasPayment.selector, gasPayment, incorrectPayment)
+        );
+        messenger.sendCrossChainMessage{ value: incorrectPayment }(message);
 
         vm.stopPrank();
     }
@@ -169,11 +166,7 @@ contract CrossChainMessengerTest is Test {
     function test_Handle_DepositRequest() public {
         bytes memory payload = abi.encode(100e6);
         bytes memory encodedMessage = abi.encode(
-            ICrossChainMessenger.MessageType.DEPOSIT_REQUEST,
-            address(motherVault),
-            payload,
-            uint256(1),
-            block.timestamp
+            ICrossChainMessenger.MessageType.DEPOSIT_REQUEST, address(motherVault), payload, uint256(1), block.timestamp
         );
 
         vm.prank(address(mailbox));
@@ -181,7 +174,7 @@ contract CrossChainMessengerTest is Test {
 
         bytes32 messageId = keccak256(abi.encodePacked(ARBITRUM_DOMAIN, TRUSTED_SENDER, encodedMessage));
         assertTrue(messenger.processedMessages(messageId));
-        
+
         (bool processed, bool success) = messenger.getMessageStatus(messageId);
         assertTrue(processed);
         assertTrue(success);
@@ -225,7 +218,7 @@ contract CrossChainMessengerTest is Test {
         );
 
         bytes32 untrustedSender = bytes32(uint256(uint160(address(0x999))));
-        
+
         vm.prank(address(mailbox));
         vm.expectRevert(abi.encodeWithSelector(CrossChainMessenger.UntrustedSender.selector, untrustedSender));
         messenger.handle(ARBITRUM_DOMAIN, untrustedSender, encodedMessage);
@@ -277,15 +270,10 @@ contract CrossChainMessengerTest is Test {
             ICrossChainMessenger.MessageType.EMERGENCY_WITHDRAW_ALL
         ];
 
-        for (uint i = 0; i < messageTypes.length; i++) {
+        for (uint256 i = 0; i < messageTypes.length; i++) {
             bytes memory payload = abi.encode(100e6);
-            bytes memory encodedMessage = abi.encode(
-                messageTypes[i],
-                address(motherVault),
-                payload,
-                uint256(i + 1),
-                block.timestamp
-            );
+            bytes memory encodedMessage =
+                abi.encode(messageTypes[i], address(motherVault), payload, uint256(i + 1), block.timestamp);
 
             vm.prank(address(mailbox));
             messenger.handle(ARBITRUM_DOMAIN, TRUSTED_SENDER, encodedMessage);
@@ -297,32 +285,32 @@ contract CrossChainMessengerTest is Test {
 
     function test_ConfigureDomain() public {
         vm.startPrank(admin);
-        
+
         uint256 newChainId = 1337;
         uint32 newDomain = 1337;
-        
+
         messenger.configureDomain(newChainId, newDomain);
-        
+
         assertEq(messenger.chainToHyperlaneDomain(newChainId), newDomain);
         assertEq(messenger.hyperlaneDomainToChain(newDomain), newChainId);
-        
+
         vm.stopPrank();
     }
 
     function test_SetTrustedSender() public {
         vm.startPrank(admin);
-        
+
         uint32 newDomain = 1337;
         bytes32 newSender = bytes32(uint256(uint160(address(0x1337))));
-        
+
         vm.expectEmit(true, true, false, false);
         emit TrustedSenderSet(newDomain, newSender);
-        
+
         messenger.setTrustedSender(newDomain, newSender);
-        
+
         assertEq(messenger.trustedSenders(newDomain), newSender);
         assertTrue(messenger.trustedDomains(newDomain));
-        
+
         vm.stopPrank();
     }
 
@@ -333,10 +321,10 @@ contract CrossChainMessengerTest is Test {
 
     function test_Pause() public {
         vm.startPrank(admin);
-        
+
         messenger.pause();
         assertTrue(messenger.paused());
-        
+
         ICrossChainMessenger.CrossChainMessage memory message = ICrossChainMessenger.CrossChainMessage({
             targetChainId: ARBITRUM_DOMAIN,
             targetVault: childVault,
@@ -345,22 +333,22 @@ contract CrossChainMessengerTest is Test {
             nonce: 0,
             timestamp: block.timestamp
         });
-        
+
         vm.expectRevert(abi.encodeWithSignature("EnforcedPause()"));
         messenger.sendCrossChainMessage(message);
-        
+
         vm.stopPrank();
     }
 
     function test_Unpause() public {
         vm.startPrank(admin);
-        
+
         messenger.pause();
         assertTrue(messenger.paused());
-        
+
         messenger.unpause();
         assertFalse(messenger.paused());
-        
+
         vm.stopPrank();
     }
 
@@ -372,13 +360,13 @@ contract CrossChainMessengerTest is Test {
 
     function testFuzz_SendMessage(uint256 amount, uint256 targetChainId) public {
         vm.assume(amount > 0 && amount < 1000e6);
-        vm.assume(targetChainId > 100 && targetChainId < 65535); // Valid domain range, avoid existing
+        vm.assume(targetChainId > 100 && targetChainId < 65_535); // Valid domain range, avoid existing
         vm.assume(targetChainId != BASE_DOMAIN); // Avoid conflict with already configured domain
         vm.assume(targetChainId != ARBITRUM_DOMAIN); // Avoid conflict with already configured domain
         vm.assume(targetChainId != 1 && targetChainId != 10); // Avoid ETH and Optimism
 
         vm.startPrank(admin);
-        
+
         // Configure the domain first - use safe conversion
         uint32 targetDomain = uint32(targetChainId);
         messenger.configureDomain(targetChainId, targetDomain);
@@ -395,8 +383,8 @@ contract CrossChainMessengerTest is Test {
 
         uint256 gasPayment = 1000;
         mailbox.setNextMessageId(keccak256(abi.encode(amount, targetDomain)));
-        
-        bytes32 messageId = messenger.sendCrossChainMessage{value: gasPayment}(message);
+
+        bytes32 messageId = messenger.sendCrossChainMessage{ value: gasPayment }(message);
         assertNotEq(messageId, bytes32(0));
 
         vm.stopPrank();
