@@ -29,6 +29,10 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
     uint256 public constant BUFFER_PERCENTAGE = 500; // 5% in basis points
     uint256 public constant MAX_MANAGEMENT_FEE_BPS = 200; // 2% maximum annual fee
     uint256 public constant FEE_UPDATE_TIMELOCK = 7 days; // Minimum time lock for fee updates
+    
+    // Share price manipulation protection
+    uint256 public constant MIN_DEPOSIT_AMOUNT = 10 * 1e6; // Minimum 10 USDC deposit
+    uint256 public constant VIRTUAL_SHARES_MULTIPLIER = 1e3; // Virtual share multiplier for price stability
 
     IERC20 public immutable override USDC;
     uint8 private immutable _usdcDecimals;
@@ -57,12 +61,39 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
     uint32[] private _activeChainIds;
 
     mapping(bytes32 => bool) private _processedMessages;
+    
+    // Enhanced authentication for child vaults
+    mapping(uint32 => bytes32) private _childVaultPubKeyHashes; // domain => keccak256(pubkey)
+    mapping(bytes32 => bool) private _verifiedChildMessages; // messageHash => verified
+    
+    // Cross-chain state synchronization tracking
+    struct PendingCrossChainOperation {
+        uint256 amount;
+        uint32 targetDomain;
+        uint256 timestamp;
+        OperationType opType;
+        bool completed;
+        bytes32 messageId;
+    }
+    
+    enum OperationType {
+        DEPLOYMENT,
+        WITHDRAWAL,
+        REBALANCE
+    }
+    
+    mapping(bytes32 => PendingCrossChainOperation) public pendingOperations;
+    mapping(uint32 => bytes32[]) public domainPendingOperations;
+    
+    uint256 public constant CROSS_CHAIN_TIMEOUT = 4 hours;
+    uint256 public constant STATE_SYNC_GRACE_PERIOD = 30 minutes;
 
     ICrossChainMessenger public crossChainMessenger;
     CCTPBridge public cctpBridge;
 
     // Additional events not in interface
     event RebalanceInitiated(uint32 indexed worstChain, uint32 indexed bestChain, uint256 amount);
+    event CrossChainTimeout(bytes32 indexed operationId, uint32 indexed domainId, uint256 amount, string reason);
 
     modifier onlyActiveChild(uint32 domainId) {
         if (!_childVaults[domainId].isActive) revert ChildVaultNotActive(domainId);
@@ -228,7 +259,7 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
         whenNotPaused
         returns (uint256 shares)
     {
-        require(assets > 0, "Zero assets");
+        require(assets >= MIN_DEPOSIT_AMOUNT, "Below minimum deposit");
 
         uint256 maxAssets = maxDeposit(receiver);
         if (assets > maxAssets) {
@@ -237,6 +268,9 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
 
         shares = previewDeposit(assets);
         require(shares > 0, "Zero shares");
+        
+        // Virtual shares implementation provides manipulation resistance
+        // No additional share price validation needed as virtual shares handle this
 
         USDC.safeTransferFrom(msg.sender, address(this), assets);
 
@@ -290,6 +324,17 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
     {
         require(assets > 0, "Zero assets");
         require(assets <= maxWithdraw(owner), "Exceeds max");
+        
+        // Strict buffer protection - check before any state changes
+        if (bufferManagementEnabled) {
+            uint256 availableForWithdrawal = _getAvailableForWithdrawal();
+            require(assets <= availableForWithdrawal, "Withdrawal would violate buffer requirements");
+            
+            // Additional check: ensure buffer remains sufficient after withdrawal
+            uint256 bufferAfterWithdrawal = _totalIdle - assets;
+            uint256 requiredBuffer = getRequiredBuffer();
+            require(bufferAfterWithdrawal >= requiredBuffer, "Buffer would be insufficient after withdrawal");
+        }
 
         shares = previewWithdraw(assets);
 
@@ -324,6 +369,17 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
         require(shares <= maxRedeem(owner), "Exceeds max");
 
         assets = previewRedeem(shares);
+        
+        // Strict buffer protection - check before any state changes
+        if (bufferManagementEnabled) {
+            uint256 availableForWithdrawal = _getAvailableForWithdrawal();
+            require(assets <= availableForWithdrawal, "Redemption would violate buffer requirements");
+            
+            // Additional check: ensure buffer remains sufficient after redemption
+            uint256 bufferAfterWithdrawal = _totalIdle - assets;
+            uint256 requiredBuffer = getRequiredBuffer();
+            require(bufferAfterWithdrawal >= requiredBuffer, "Buffer would be insufficient after redemption");
+        }
 
         // Effects: State changes are made before the external call to prevent reentrancy.
         if (msg.sender != owner) {
@@ -516,6 +572,17 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
 
         uint256 fee = crossChainMessenger.estimateMessageFee(domainId);
         bytes32 messageId = crossChainMessenger.sendCrossChainMessage{ value: fee }(crossChainMsg);
+        
+        // Track pending operation for timeout handling
+        pendingOperations[messageId] = PendingCrossChainOperation({
+            amount: amount,
+            targetDomain: domainId,
+            timestamp: block.timestamp,
+            opType: OperationType.DEPLOYMENT,
+            completed: false,
+            messageId: messageId
+        });
+        domainPendingOperations[domainId].push(messageId);
 
         emit FundsDeployedToChild(domainId, amount, messageId);
     }
@@ -544,7 +611,12 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
         require(bufferManagementEnabled, "Buffer management disabled");
         require(!isBufferSufficient(), "Buffer is sufficient");
 
-        uint256 bufferDeficit = getRequiredBuffer() - getCurrentBuffer();
+        uint256 requiredBuffer = getRequiredBuffer();
+        uint256 currentBuffer = getCurrentBuffer();
+        
+        // Prevent underflow in buffer deficit calculation
+        require(requiredBuffer > currentBuffer, "Buffer is actually sufficient");
+        uint256 bufferDeficit = requiredBuffer - currentBuffer;
         require(bufferDeficit > 0, "No buffer deficit");
 
         uint256 totalDeployed = _totalDeployed;
@@ -576,23 +648,37 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
         require(msg.sender == address(crossChainMessenger), "Only messenger");
         require(_childVaults[origin].isActive, "Unknown origin");
 
-        // Authenticate the original sender from the source chain
+        // Enhanced authentication with multiple checks
+        // 1. Verify sender address matches expected child vault
         bytes32 expectedSender = bytes32(uint256(uint160(_childVaults[origin].vaultAddress)));
         require(sender == expectedSender, "Untrusted sender for origin");
+        
+        // 2. Verify message hash hasn't been processed (prevent replay within same chain)
+        bytes32 messageHash = keccak256(abi.encodePacked(origin, sender, message, block.chainid));
+        require(!_verifiedChildMessages[messageHash], "Message already processed");
+        _verifiedChildMessages[messageHash] = true;
+        
+        // 3. Additional domain-specific validation
+        require(_childVaults[origin].lastReportTime + 1 hours < block.timestamp, "Rate limit exceeded");
 
         // Process yield reports and other messages from child vaults
         (uint8 messageType, bytes memory payload) = abi.decode(message, (uint8, bytes));
 
         if (messageType == 2) {
-            // YIELD_REPORT
+            // YIELD_REPORT - Additional validation for yield reports
             (uint256 apy, uint256 totalValue) = abi.decode(payload, (uint256, uint256));
+            
+            // Sanity checks on reported values
+            require(apy <= 100000, "APY exceeds maximum"); // Max 1000% APY
+            require(totalValue <= _childVaults[origin].deployedAmount * 2, "Unrealistic total value");
+            
             _childVaults[origin].reportedAPY = apy;
             _childVaults[origin].lastReportTime = block.timestamp;
             emit YieldReported(origin, apy, totalValue);
         }
     }
 
-    function handleCCTPReceive(uint256 amount, uint32 sourceDomain, bytes32 /*sender*/ ) external override {
+    function handleCCTPReceive(uint256 amount, uint32 sourceDomain, bytes32 messageHash) external override {
         // Accept callbacks either from the messenger or directly from the CCTP bridge
         require(
             msg.sender == address(crossChainMessenger) || msg.sender == address(cctpBridge), "Only messenger/bridge"
@@ -603,6 +689,9 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
         _totalIdle += amount;
         _childVaults[sourceDomain].deployedAmount -= amount;
         _totalDeployed -= amount;
+        
+        // Mark any related pending operations as completed
+        _markOperationsCompleted(sourceDomain, amount);
 
         emit FundsReceivedFromChild(sourceDomain, amount);
 
@@ -613,6 +702,52 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
 
         // Note: RebalanceCompleted event would be emitted by external rebalancer
         // when it coordinates the full rebalance operation
+    }
+    
+    /**
+     * @notice Check for timed-out cross-chain operations and initiate recovery
+     * @param domainId The domain to check for timeouts
+     */
+    function checkAndRecoverTimeouts(uint32 domainId) external onlyRole(MANAGER_ROLE) {
+        bytes32[] memory operations = domainPendingOperations[domainId];
+        
+        for (uint256 i = 0; i < operations.length; i++) {
+            PendingCrossChainOperation storage op = pendingOperations[operations[i]];
+            
+            if (!op.completed && block.timestamp > op.timestamp + CROSS_CHAIN_TIMEOUT) {
+                // Operation has timed out, initiate recovery
+                if (op.opType == OperationType.DEPLOYMENT) {
+                    // Revert the deployment accounting
+                    _totalDeployed -= op.amount;
+                    _totalIdle += op.amount;
+                    _childVaults[domainId].deployedAmount -= op.amount;
+                    
+                    emit CrossChainTimeout(operations[i], domainId, op.amount, "Deployment reverted");
+                } else if (op.opType == OperationType.WITHDRAWAL) {
+                    // For withdrawals, we may need to retry or mark as failed
+                    emit CrossChainTimeout(operations[i], domainId, op.amount, "Withdrawal timeout");
+                }
+                
+                op.completed = true; // Mark as handled even if failed
+            }
+        }
+    }
+    
+    /**
+     * @notice Mark pending operations as completed based on received funds
+     */
+    function _markOperationsCompleted(uint32 sourceDomain, uint256 amount) private {
+        bytes32[] memory operations = domainPendingOperations[sourceDomain];
+        
+        for (uint256 i = 0; i < operations.length; i++) {
+            PendingCrossChainOperation storage op = pendingOperations[operations[i]];
+            
+            if (!op.completed && op.amount == amount && 
+                block.timestamp <= op.timestamp + CROSS_CHAIN_TIMEOUT + STATE_SYNC_GRACE_PERIOD) {
+                op.completed = true;
+                break; // Mark first matching operation as complete
+            }
+        }
     }
 
     function reportYield(
@@ -806,12 +941,37 @@ contract MotherVault is IMotherVault, ERC20, ReentrancyGuard, Pausable, AccessCo
 
     function _convertToShares(uint256 assets, Math.Rounding rounding) internal view returns (uint256) {
         uint256 supply = totalSupply();
-        return (assets == 0 || supply == 0) ? assets : assets.mulDiv(supply, totalAssets(), rounding);
+        uint256 totalAssets_ = totalAssets();
+        
+        // Handle edge cases first
+        if (assets == 0) return 0;
+        
+        // ALWAYS apply virtual shares protection, even when supply == 0
+        // This ensures consistent manipulation resistance for all deposits
+        uint256 virtualShares = VIRTUAL_SHARES_MULTIPLIER;
+        uint256 virtualAssets = VIRTUAL_SHARES_MULTIPLIER;
+        
+        // Formula: shares = assets * (supply + virtualShares) / (totalAssets + virtualAssets)
+        // When supply == 0 and totalAssets == assets (first deposit), this becomes:
+        // shares = assets * virtualShares / (assets + virtualAssets)
+        return assets.mulDiv(supply + virtualShares, totalAssets_ + virtualAssets, rounding);
     }
 
     function _convertToAssets(uint256 shares, Math.Rounding rounding) internal view returns (uint256) {
         uint256 supply = totalSupply();
-        return (supply == 0) ? shares : shares.mulDiv(totalAssets(), supply, rounding);
+        uint256 totalAssets_ = totalAssets();
+        
+        // Handle edge cases first
+        if (shares == 0) return 0;
+        
+        // ALWAYS apply virtual shares protection, even when supply == 0
+        // This ensures consistent manipulation resistance for all conversions
+        uint256 virtualShares = VIRTUAL_SHARES_MULTIPLIER;
+        uint256 virtualAssets = VIRTUAL_SHARES_MULTIPLIER;
+        
+        // Formula: assets = shares * (totalAssets + virtualAssets) / (supply + virtualShares)
+        // This handles the supply == 0 case properly with virtual share protection
+        return shares.mulDiv(totalAssets_ + virtualAssets, supply + virtualShares, rounding);
     }
 
     function _enforceRateLimit() private {

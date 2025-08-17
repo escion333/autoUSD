@@ -5,6 +5,29 @@ import "forge-std/Script.sol";
 import "../../contracts/yield-strategies/KatanaChildVault.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
+// Interface for SushiSwap V3 Factory
+interface ISushiSwapV3Factory {
+    function createPool(
+        address tokenA,
+        address tokenB,
+        uint24 fee
+    ) external returns (address pool);
+    
+    function getPool(
+        address tokenA,
+        address tokenB,
+        uint24 fee
+    ) external view returns (address pool);
+}
+
+// Interface for SushiSwap V3 Pool
+interface ISushiSwapV3Pool {
+    function initialize(uint160 sqrtPriceX96) external;
+    function token0() external view returns (address);
+    function token1() external view returns (address);
+    function fee() external view returns (uint24);
+}
+
 contract DeployKatanaTatara is Script {
     // Katana Tatara testnet addresses (from contracts.katana.tools)
     address constant SUSHISWAP_V3_FACTORY = 0x9B3336186a38E1b6c21955d112dbb0343Ee061eE;
@@ -19,7 +42,7 @@ contract DeployKatanaTatara is Script {
     
     // Domain configuration
     uint32 constant MOTHER_DOMAIN = 1; // Base (mother vault domain)
-    uint32 constant KATANA_DOMAIN = 2; // Katana domain ID
+    uint32 constant KATANA_DOMAIN = 2; // Katana domain ID in AggLayer (to be confirmed)
     
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
@@ -28,6 +51,7 @@ contract DeployKatanaTatara is Script {
         console.log("\n===== KATANA TATARA DEPLOYMENT =====");
         console.log("Deployer:", deployer);
         console.log("Chain ID:", block.chainid);
+        console.log("Expected Chain ID: 129399"); // Correct Tatara chain ID
         console.log("Deployer balance:", deployer.balance / 1e18, "ETH");
         
         // Get Mother Vault address from env (deployed on Base Sepolia)
@@ -70,18 +94,42 @@ contract DeployKatanaTatara is Script {
         // Mother vault is already set in constructor
         console.log("Mother vault configured:", motherVault);
         
-        // Add USDC/USDT pool configuration
-        // Pool fee tier: 0.3% = 3000
-        uint24 poolFee = 3000;
+        // Create or verify VBUSDC/USDT pool
+        uint24 poolFee = 3000; // 0.3% fee tier
         
-        // Check if VBUSDC/USDT pool exists (would need to call factory.getPool)
-        // For testnet deployment, we assume pool will be created manually if needed
+        ISushiSwapV3Factory factory = ISushiSwapV3Factory(SUSHISWAP_V3_FACTORY);
+        address existingPool = factory.getPool(VBUSDC, USDT, poolFee);
+        
+        if (existingPool == address(0)) {
+            console.log("VBUSDC/USDT pool doesn't exist. Creating new pool...");
+            
+            // Create the pool
+            address newPool = factory.createPool(VBUSDC, USDT, poolFee);
+            console.log("Pool created at:", newPool);
+            
+            // Initialize the pool with 1:1 price ratio (assuming both are stablecoins)
+            // sqrtPriceX96 = sqrt(1) * 2^96 = 2^96
+            uint160 sqrtPriceX96 = 79228162514264337593543950336; // 2^96
+            
+            ISushiSwapV3Pool pool = ISushiSwapV3Pool(newPool);
+            pool.initialize(sqrtPriceX96);
+            console.log("Pool initialized with 1:1 price ratio");
+            
+            // Configure child vault with the new pool
+            childVault.addPair(USDT, poolFee);
+            console.log("Added VBUSDC/USDT pair to child vault");
+        } else {
+            console.log("VBUSDC/USDT pool already exists at:", existingPool);
+            
+            // Configure child vault with existing pool
+            childVault.addPair(USDT, poolFee);
+            console.log("Added existing VBUSDC/USDT pair to child vault");
+        }
+        
         console.log("Pool configuration:");
         console.log("- VBUSDC:", VBUSDC);
         console.log("- USDT:", USDT);
         console.log("- Fee tier: 0.3%");
-        console.log("WARNING: Verify VBUSDC/USDT pool exists on SushiSwap V3");
-        console.log("If not, create pool manually via SushiSwap interface");
         
         vm.stopBroadcast();
         

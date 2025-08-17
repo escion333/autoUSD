@@ -15,10 +15,8 @@ contract DeployPolygonAmoy is Script {
     address constant TOKEN_MESSENGER = 0x9f3B8679c73C2Fef8b59B4f3444d4e156fb70AA5;
     address constant MESSAGE_TRANSMITTER = 0x7865fAfC2db2093669d92c0F33AeEF291086BEFD;
     
-    // AggLayer Unified Bridge on Polygon Amoy 
-    // WARNING: This is a placeholder address and MUST be updated before deployment
-    // Check https://docs.agglayer.dev for the correct Polygon Amoy bridge address
-    address constant AGGLAYER_BRIDGE = 0x2a3DD3EB832aF982ec71669E178424b10Dca2EDe; // TODO: CRITICAL - Update before deployment
+    // AggLayer bridge will be set post-deployment using LxLy.js
+    // See scripts/bridge/ for bridge configuration
     
     // Domain IDs
     uint32 constant BASE_DOMAIN = 10002; // Base Sepolia domain for CCTP
@@ -62,13 +60,13 @@ contract DeployPolygonAmoy is Script {
         );
         console.log("Bridge Vault deployed:", address(bridgeVault));
         
-        // Deploy AggLayerAdapter
+        // Deploy AggLayerAdapter (bridge address will be set later)
         AggLayerAdapter aggAdapter = new AggLayerAdapter(
-            AGGLAYER_BRIDGE,
             USDC_POLYGON_AMOY,
             address(bridgeVault)
         );
         console.log("AggLayer Adapter deployed:", address(aggAdapter));
+        console.log("NOTE: Bridge address must be set using setBridgeAddress() after obtaining from AggLayer");
         
         // Configure BridgeVault with AggLayer adapter
         bridgeVault.setAggLayerAdapter(address(aggAdapter));

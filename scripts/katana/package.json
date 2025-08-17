@@ -1,0 +1,13 @@
+{
+  "name": "katana-bridge-scripts",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Bridge scripts for Katana integration",
+  "scripts": {
+    "bridge": "node bridge-to-tatara.js"
+  },
+  "dependencies": {
+    "viem": "^2.0.0",
+    "dotenv": "^16.0.0"
+  }
+}

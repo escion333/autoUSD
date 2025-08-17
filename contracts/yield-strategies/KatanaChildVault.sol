@@ -40,6 +40,12 @@ contract KatanaChildVault is ReentrancyGuard, Pausable, AccessControl, IMessageR
     // Security Enhancements
     uint256 public minLiquidity = 1000e6; // Minimum 1000 USDC liquidity in pool
     uint256 public maxDepositAmount = 100_000e6; // Maximum 100,000 USDC deposit per tx
+    
+    // Enhanced slippage protection
+    uint256 public constant MAX_SLIPPAGE_BPS = 500; // Maximum 5% slippage allowed
+    uint256 public priceToleranceBps = 200; // 2% price tolerance for oracle validation
+    uint256 public lastValidPrice; // Last known valid USDC/WETH price
+    uint256 public priceUpdateThreshold = 1 hours; // Time threshold for price updates
 
     struct ApySnapshot {
         uint256 timestamp;
@@ -362,7 +368,29 @@ contract KatanaChildVault is ReentrancyGuard, Pausable, AccessControl, IMessageR
     }
 
     function _addLiquidity(uint256 amount) internal {
+        require(amount > 0, "Zero amount");
+        require(slippageBps <= MAX_SLIPPAGE_BPS, "Slippage too high");
+        
+        // Check pool liquidity to prevent sandwich attacks
+        uint256 poolLiquidity = _getPoolLiquidity();
+        require(poolLiquidity >= minLiquidity, "Insufficient pool liquidity");
+        
+        // Validate that the amount doesn't exceed a reasonable percentage of pool
+        require(amount <= poolLiquidity / 10, "Amount too large relative to pool");
+        
         uint256 halfAmount = amount / 2;
+        
+        // Get current pool reserves for price validation
+        (uint256 reserveUsdc, uint256 reserveWeth,) = IKatanaPair(katanaPair).getReserves();
+        address token0 = IKatanaPair(katanaPair).token0();
+        if (token0 != usdc) {
+            (reserveUsdc, reserveWeth) = (reserveWeth, reserveUsdc);
+        }
+        
+        // Calculate expected price and validate against historical price
+        uint256 currentPrice = (reserveWeth * 1e18) / reserveUsdc;
+        _validatePriceMovement(currentPrice);
+        
         // Reset allowance to 0 first for security against approval exploits
         IERC20(usdc).approve(katanaRouter, 0);
         IERC20(usdc).approve(katanaRouter, halfAmount);
@@ -372,14 +400,28 @@ contract KatanaChildVault is ReentrancyGuard, Pausable, AccessControl, IMessageR
         path[1] = weth;
 
         uint256[] memory amountsOut = IKatanaRouter(katanaRouter).getAmountsOut(halfAmount, path);
-        uint256 minWethOut = amountsOut[1] * (10_000 - slippageBps) / 10_000;
+        uint256 expectedWethOut = amountsOut[1];
+        
+        // Enhanced slippage protection with price impact validation
+        uint256 priceImpact = _calculatePriceImpact(halfAmount, reserveUsdc, reserveWeth);
+        require(priceImpact <= slippageBps, "Price impact too high");
+        
+        uint256 minWethOut = expectedWethOut * (10_000 - slippageBps) / 10_000;
+
+        // Record balances before swap for validation
+        uint256 usdcBefore = IERC20(usdc).balanceOf(address(this));
+        uint256 wethBefore = IERC20(weth).balanceOf(address(this));
 
         IKatanaRouter(katanaRouter).swapExactTokensForTokens(
-            halfAmount, minWethOut, path, address(this), block.timestamp
+            halfAmount, minWethOut, path, address(this), block.timestamp + 300 // 5 min deadline
         );
 
         uint256 wethBalance = IERC20(weth).balanceOf(address(this));
         uint256 usdcBalanceForLP = IERC20(usdc).balanceOf(address(this));
+        
+        // Validate swap results
+        require(wethBalance >= wethBefore + minWethOut, "Insufficient WETH received");
+        require(usdcBefore - usdcBalanceForLP == halfAmount, "Unexpected USDC change");
 
         // Reset allowances to 0 first for security against approval exploits
         IERC20(usdc).approve(katanaRouter, 0);
@@ -390,9 +432,87 @@ contract KatanaChildVault is ReentrancyGuard, Pausable, AccessControl, IMessageR
         uint256 minUsdcForLP = usdcBalanceForLP * (10_000 - slippageBps) / 10_000;
         uint256 minWethForLP = wethBalance * (10_000 - slippageBps) / 10_000;
 
+        // Record LP token balance before adding liquidity
+        uint256 lpBefore = IERC20(katanaPair).balanceOf(address(this));
+
         IKatanaRouter(katanaRouter).addLiquidity(
-            usdc, weth, usdcBalanceForLP, wethBalance, minUsdcForLP, minWethForLP, address(this), block.timestamp
+            usdc, weth, usdcBalanceForLP, wethBalance, minUsdcForLP, minWethForLP, address(this), block.timestamp + 300
         );
+        
+        // Validate liquidity addition
+        uint256 lpAfter = IERC20(katanaPair).balanceOf(address(this));
+        require(lpAfter > lpBefore, "No LP tokens received");
+        
+        // Update price reference
+        lastValidPrice = currentPrice;
+    }
+    
+    /**
+     * @notice Get current pool liquidity in USDC terms
+     */
+    function _getPoolLiquidity() internal view returns (uint256) {
+        (uint256 reserve0, uint256 reserve1,) = IKatanaPair(katanaPair).getReserves();
+        address token0 = IKatanaPair(katanaPair).token0();
+        
+        if (token0 == usdc) {
+            return reserve0 * 2; // Assume 50/50 pool, return total liquidity in USDC terms
+        } else {
+            return reserve1 * 2;
+        }
+    }
+    
+    /**
+     * @notice Calculate price impact of a trade
+     */
+    function _calculatePriceImpact(uint256 amountIn, uint256 reserveIn, uint256 reserveOut) internal pure returns (uint256) {
+        // Comprehensive zero-value protection
+        require(amountIn > 0, "Amount must be positive");
+        require(reserveIn > 0, "Reserve in must be positive");
+        require(reserveOut > 0, "Reserve out must be positive");
+        
+        // Additional safety check for reasonable reserves
+        require(reserveIn >= 1e6, "Reserve too small"); // At least 1 USDC worth
+        require(reserveOut >= 1e12, "Reserve too small"); // At least 1e-6 ETH worth
+        
+        uint256 amountInWithFee = amountIn * 997;
+        uint256 numerator = amountInWithFee * reserveOut;
+        uint256 denominator = (reserveIn * 1000) + amountInWithFee;
+        require(denominator > 0, "Invalid denominator");
+        
+        uint256 amountOut = numerator / denominator;
+        
+        // Ensure we don't drain the pool
+        require(amountOut < reserveOut, "Amount out exceeds reserve");
+        
+        uint256 priceBeforeImpact = (reserveOut * 1e18) / reserveIn;
+        uint256 newReserveIn = reserveIn + amountIn;
+        uint256 newReserveOut = reserveOut - amountOut;
+        
+        // Additional check to prevent division by zero
+        require(newReserveIn > 0, "New reserve in invalid");
+        require(newReserveOut > 0, "New reserve out invalid");
+        
+        uint256 priceAfterImpact = (newReserveOut * 1e18) / newReserveIn;
+        
+        if (priceBeforeImpact > priceAfterImpact) {
+            return ((priceBeforeImpact - priceAfterImpact) * 10_000) / priceBeforeImpact;
+        }
+        return 0;
+    }
+    
+    /**
+     * @notice Validate price movement against historical reference
+     */
+    function _validatePriceMovement(uint256 currentPrice) internal view {
+        if (lastValidPrice > 0) {
+            uint256 priceChange;
+            if (currentPrice > lastValidPrice) {
+                priceChange = ((currentPrice - lastValidPrice) * 10_000) / lastValidPrice;
+            } else {
+                priceChange = ((lastValidPrice - currentPrice) * 10_000) / lastValidPrice;
+            }
+            require(priceChange <= priceToleranceBps, "Price movement too large");
+        }
     }
 
     function reportApy() public nonReentrant onlyRole(MESSENGER_ROLE) {

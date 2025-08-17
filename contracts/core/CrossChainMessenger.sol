@@ -39,6 +39,10 @@ contract CrossChainMessenger is ICrossChainMessenger, IMessageRecipient, AccessC
     mapping(bytes32 => MessageStatus) public messageStatuses;
     mapping(bytes32 => FailedMessage) public failedMessages;
     mapping(address => bytes32[]) public userFailedMessages;
+    
+    // Nonce tracking for replay protection
+    mapping(uint32 => mapping(bytes32 => uint256)) public domainSenderNonces; // domain => sender => nonce
+    mapping(uint32 => uint256) public domainLastProcessedTimestamp; // domain => last processed timestamp
 
     struct MessageStatus {
         bool processed;
@@ -352,11 +356,20 @@ contract CrossChainMessenger is ICrossChainMessenger, IMessageRecipient, AccessC
         }
         if (trustedSenders[_origin] != _sender) revert UntrustedSender(_sender);
 
-        // Calculate message ID
-        bytes32 messageId = keccak256(abi.encodePacked(_origin, _sender, _message));
+        // Calculate message ID with enhanced domain separation to prevent replay attacks
+        // Include chain ID, block number, and timestamp for unique identification
+        bytes32 messageId = keccak256(abi.encodePacked(
+            block.chainid,
+            _origin,
+            _sender,
+            _message,
+            block.timestamp,
+            block.number,
+            address(this)
+        ));
 
         // Decode message to verify recipient before further processing
-        (MessageType messageType, address targetVault, bytes memory payload, uint256 nonce, uint256 timestamp) =
+        (MessageType messageType, address targetVault, bytes memory payload, uint256 nonce, uint256 messageTimestamp) =
             abi.decode(_message, (MessageType, address, bytes, uint256, uint256));
 
         // Authenticate that this message is intended for this MotherVault
@@ -366,14 +379,25 @@ contract CrossChainMessenger is ICrossChainMessenger, IMessageRecipient, AccessC
         if (processedMessages[messageId]) {
             revert MessageAlreadyProcessed(messageId);
         }
+        
+        // SECURITY FIX: Validate timestamp FIRST before any state updates
+        // Prevent future timestamps and ensure message is not stale
+        require(messageTimestamp <= block.timestamp, "Message timestamp in future");
+        require(messageTimestamp + MESSAGE_EXPIRY > block.timestamp, "Message expired");
+        
+        // Validate timestamp ordering (messages must be processed in order)
+        require(messageTimestamp > domainLastProcessedTimestamp[_origin], "Timestamp out of order");
 
-        // Mark as processed
+        // Validate nonce for replay protection
+        // Fix: For the first message, nonce should be 1, subsequent messages should increment
+        uint256 currentNonce = domainSenderNonces[_origin][_sender];
+        uint256 expectedNonce = currentNonce + 1;
+        require(nonce == expectedNonce, "Invalid nonce sequence");
+
+        // All validations passed - now safe to update state
         processedMessages[messageId] = true;
-
-        // Check message expiry
-        if (block.timestamp > timestamp + MESSAGE_EXPIRY) {
-            revert MessageExpired(timestamp + MESSAGE_EXPIRY);
-        }
+        domainSenderNonces[_origin][_sender] = nonce;
+        domainLastProcessedTimestamp[_origin] = messageTimestamp;
 
         emit MessageReceived(_origin, messageType, messageId, nonce);
 

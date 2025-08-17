@@ -30,9 +30,8 @@ test-results/
 # Documentation (internal AI resources)
 docs/
 
-# Reports and logs
-logs/
-reports/
+# Build artifacts and reports
+build-artifacts/
 
 # Temporary files
 *.tmp
@@ -55,3 +54,4 @@ deployments/
 
 # CLAUDE.md (AI context file)
 CLAUDE.md
+.env.polygon

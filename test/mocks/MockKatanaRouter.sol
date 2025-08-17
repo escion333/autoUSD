@@ -39,7 +39,8 @@ contract MockKatanaRouter {
         external
         returns (uint256 amountA, uint256 amountB)
     {
-        // Mock implementation - return proportional amounts
+        // Mock implementation - return proportional amounts with zero check
+        require(liquidity > 0, "Zero liquidity");
         return (liquidity / 2, liquidity / 2);
     }
 

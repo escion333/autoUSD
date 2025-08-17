@@ -53,6 +53,7 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
     uint256 public constant MAX_RETRY_COUNT = 3;
     uint256[] public retryDelays = [1 minutes, 5 minutes, 15 minutes];
     uint256 public constant BRIDGE_TIMEOUT = 2 hours;
+    uint256 public constant MAX_MESSAGE_SIZE = 10_000; // Maximum message size in bytes
     uint256 public minBridgeAmount = 1e6; // 1 USDC minimum
     uint256 public maxBridgeAmount = 1_000_000e6; // 1M USDC maximum
 
@@ -84,6 +85,8 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
     event DomainConfigured(uint256 indexed chainId, uint32 indexed domain, bool indexed supported);
 
     event BridgeLimitsUpdated(uint256 indexed minAmount, uint256 indexed maxAmount);
+    
+    event CallbackFailed(address indexed recipient, uint256 indexed amount);
 
     // Errors
     error InvalidDomain(uint32 domain);
@@ -294,18 +297,43 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
     {
         require(msg.sender == address(tokenMessenger), "Only TokenMessenger");
         require(supportedDomains[sourceDomain], "Unsupported source domain");
+        
+        // Validate message body length
+        require(messageBody.length > 0 && messageBody.length <= MAX_MESSAGE_SIZE, "Invalid message size");
 
         bytes32 messageHash = keccak256(messageBody);
         if (processedMessages[messageHash]) revert MessageAlreadyProcessed(messageHash);
         processedMessages[messageHash] = true;
 
-        CCTPMessage memory cctpMessage = _parseCCTPMessage(messageBody);
+        // Parse and validate CCTP message
+        CCTPMessage memory cctpMessage;
+        try this.parseCCTPMessageWithValidation(messageBody) returns (CCTPMessage memory parsed) {
+            cctpMessage = parsed;
+        } catch {
+            revert("Invalid CCTP message format");
+        }
+        
+        // Validate amount bounds
+        require(cctpMessage.amount > 0, "Zero amount");
+        require(cctpMessage.amount <= maxBridgeAmount, "Amount exceeds maximum");
+        
+        // Validate recipient address
         address recipient = address(uint160(uint256(cctpMessage.recipient)));
-
-        // Clear pending transfer if it exists
+        require(recipient != address(0), "Invalid recipient");
+        require(recipient != address(this), "Cannot send to self");
+        
+        // Validate nonce if it corresponds to a pending transfer
         if (pendingTransfers[cctpMessage.nonce].timestamp != 0) {
+            PendingTransfer memory pending = pendingTransfers[cctpMessage.nonce];
+            require(pending.amount == cctpMessage.amount, "Amount mismatch");
+            require(pending.recipient == recipient, "Recipient mismatch");
+            require(block.timestamp <= pending.timestamp + BRIDGE_TIMEOUT, "Transfer expired");
             delete pendingTransfers[cctpMessage.nonce];
         }
+        
+        // Validate USDC balance before transfer
+        uint256 balance = usdc.balanceOf(address(this));
+        require(balance >= cctpMessage.amount, "Insufficient USDC balance");
 
         // Transfer USDC to the intended recipient
         usdc.safeTransfer(recipient, cctpMessage.amount);
@@ -317,11 +345,35 @@ contract CCTPBridge is IMessageReceiver, AccessControl, Pausable, ReentrancyGuar
             try IMotherVault(recipient).handleCCTPReceive(cctpMessage.amount, sourceDomain, messageHash) {
                 // no-op
             } catch {
-                // swallow
+                // swallow - but emit event for monitoring
+                emit CallbackFailed(recipient, cctpMessage.amount);
             }
         }
 
         emit BridgeCompleted(messageHash, cctpMessage.amount, sourceDomain, recipient);
+    }
+    
+    /**
+     * @notice External function for safe CCTP message parsing with validation
+     * @param message The raw bytes of the CCTP message
+     * @return Parsed and validated CCTPMessage struct
+     */
+    function parseCCTPMessageWithValidation(bytes calldata message) external pure returns (CCTPMessage memory) {
+        // More precise message length validation based on actual CCTP message structure
+        // CCTP messages have a fixed structure, should be at least 116 bytes
+        require(message.length >= 116, "Message too short for CCTP format");
+        require(message.length <= 1024, "Message too long for CCTP format"); // Reasonable upper bound
+        
+        CCTPMessage memory parsed = abi.decode(message, (CCTPMessage));
+        
+        // Enhanced validation of parsed fields
+        require(parsed.version <= 1, "Unsupported message version");
+        require(parsed.amount > 0, "Amount must be positive");
+        require(parsed.sender != bytes32(0), "Invalid sender");
+        require(parsed.recipient != bytes32(0), "Invalid recipient");
+        require(parsed.nonce > 0, "Invalid nonce");
+        
+        return parsed;
     }
 
     /**

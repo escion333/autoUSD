@@ -17,6 +17,13 @@ contract Rebalancer is IRebalancer, ReentrancyGuard, Pausable, AccessControl {
     RebalanceConfig public rebalanceConfig;
     uint256 private _lastRebalanceTime;
     uint256 public bufferThreshold = 500; // 5% in basis points
+    
+    // Race condition protection
+    bool private _rebalanceInProgress;
+    mapping(uint32 => uint256) private _chainLastRebalanceTime;
+    uint256 private constant CHAIN_REBALANCE_COOLDOWN = 30 minutes;
+    bytes32 private _currentRebalanceId;
+    mapping(bytes32 => bool) private _executedRebalances;
 
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
@@ -281,13 +288,84 @@ contract Rebalancer is IRebalancer, ReentrancyGuard, Pausable, AccessControl {
         returns (bool)
     {
         require(decision.shouldExecute, "Decision not executable");
+        
+        // Generate unique rebalance ID to prevent replay
+        bytes32 rebalanceId = keccak256(abi.encodePacked(
+            decision.sourceChainId,
+            decision.targetChainId,
+            decision.amountToMove,
+            block.timestamp,
+            block.number
+        ));
+        
+        // Check for duplicate execution
+        require(!_executedRebalances[rebalanceId], "Rebalance already executed");
+        _executedRebalances[rebalanceId] = true;
+
+        // Prevent concurrent rebalances
+        require(!_rebalanceInProgress, "Rebalance already in progress");
+        _rebalanceInProgress = true;
+        _currentRebalanceId = rebalanceId;
+        
+        // Check cooldown periods
+        require(
+            block.timestamp >= _lastRebalanceTime + rebalanceConfig.rebalanceCooldown,
+            "Global cooldown not elapsed"
+        );
+        
+        if (decision.sourceChainId != 0) {
+            require(
+                block.timestamp >= _chainLastRebalanceTime[decision.sourceChainId] + CHAIN_REBALANCE_COOLDOWN,
+                "Source chain cooldown not elapsed"
+            );
+        }
+        require(
+            block.timestamp >= _chainLastRebalanceTime[decision.targetChainId] + CHAIN_REBALANCE_COOLDOWN,
+            "Target chain cooldown not elapsed"
+        );
 
         // Double-check buffer before execution
         require(motherVault.isBufferSufficient(), "Buffer insufficient for execution");
 
-        // Update last rebalance time
+        // Update timing state
         _lastRebalanceTime = block.timestamp;
+        if (decision.sourceChainId != 0) {
+            _chainLastRebalanceTime[decision.sourceChainId] = block.timestamp;
+        }
+        _chainLastRebalanceTime[decision.targetChainId] = block.timestamp;
 
+        try this._executeRebalanceInternal(decision) {
+            emit RebalanceTriggered(
+                decision.sourceChainId, decision.targetChainId, decision.amountToMove, decision.expectedAPYImprovement
+            );
+            
+            // Reset lock after successful execution
+            _rebalanceInProgress = false;
+            return true;
+        } catch (bytes memory reason) {
+            // Reset lock on failure
+            _rebalanceInProgress = false;
+            // Revert the executed rebalance flag since it failed
+            _executedRebalances[rebalanceId] = false;
+            
+            // Bubble up the revert reason
+            if (reason.length == 0) {
+                revert("Rebalance execution failed");
+            } else {
+                assembly {
+                    revert(add(32, reason), mload(reason))
+                }
+            }
+        }
+    }
+    
+    /**
+     * @notice Internal function to execute rebalance operations
+     * @dev Separated to allow proper error handling and lock management
+     */
+    function _executeRebalanceInternal(RebalanceDecision calldata decision) external {
+        require(msg.sender == address(this), "Internal function only");
+        
         if (decision.sourceChainId == 0) {
             // Deploy idle funds to the best chain (only deployable amount above buffer)
             uint256 maxDeployable = getDeployableAmount();
@@ -299,15 +377,6 @@ contract Rebalancer is IRebalancer, ReentrancyGuard, Pausable, AccessControl {
             // Execute inter-chain rebalance through MotherVault
             motherVault.initiateRebalance(decision.sourceChainId, decision.targetChainId, decision.amountToMove);
         }
-
-        emit RebalanceTriggered(
-            decision.sourceChainId, decision.targetChainId, decision.amountToMove, decision.expectedAPYImprovement
-        );
-
-        // Note: RebalanceCompleted event will be emitted by monitoring system
-        // once the cross-chain operation is confirmed complete
-
-        return true;
     }
 
     function estimateRebalanceCost(

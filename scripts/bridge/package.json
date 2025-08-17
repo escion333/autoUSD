@@ -1,0 +1,18 @@
+{
+  "name": "autousd-bridge-scripts",
+  "version": "1.0.0",
+  "description": "LxLy.js bridge scripts for autoUSD cross-chain operations",
+  "main": "index.js",
+  "scripts": {
+    "bridge:polygon-to-katana": "node bridgeToKatana.js",
+    "bridge:katana-to-polygon": "node bridgeToPolygon.js",
+    "check:status": "node checkBridgeStatus.js",
+    "claim:assets": "node claimAssets.js"
+  },
+  "dependencies": {
+    "@polygon.technology/lxlyjs": "^1.0.0",
+    "@truffle/hdwallet-provider": "^2.1.0",
+    "ethers": "^6.9.0",
+    "dotenv": "^16.0.3"
+  }
+}

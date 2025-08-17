@@ -7,16 +7,8 @@ import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-/**
- * @title AggLayerAdapter
- * @notice Adapter for bridging USDC from Polygon to Katana via AggLayer Unified Bridge
- * @dev Implements the bridge interface for AggLayer/Polygon zkEVM Bridge V2
- */
-contract AggLayerAdapter is Ownable(msg.sender), ReentrancyGuard {
-    using SafeERC20 for IERC20;
-    
-    // AggLayer Unified Bridge interface
-    interface IPolygonZkEVMBridge {
+// AggLayer Unified Bridge interface
+interface IPolygonZkEVMBridge {
         function bridgeAsset(
             uint32 destinationNetwork,
             address destinationAddress,
@@ -46,9 +38,17 @@ contract AggLayerAdapter is Ownable(msg.sender), ReentrancyGuard {
             bytes calldata metadata
         ) external;
     }
+
+/**
+ * @title AggLayerAdapter
+ * @notice Adapter for bridging USDC from Polygon to Katana via AggLayer Unified Bridge
+ * @dev Implements the bridge interface for AggLayer/Polygon zkEVM Bridge V2
+ */
+contract AggLayerAdapter is Ownable(msg.sender), ReentrancyGuard {
+    using SafeERC20 for IERC20;
     
     // State variables
-    IPolygonZkEVMBridge public immutable bridge;
+    IPolygonZkEVMBridge public bridge;  // Made mutable for post-deployment configuration
     address public immutable usdc;
     address public bridgeVault;
     address public katanaChildVault;
@@ -67,19 +67,29 @@ contract AggLayerAdapter is Ownable(msg.sender), ReentrancyGuard {
     event BridgeVaultUpdated(address indexed newVault);
     event KatanaVaultUpdated(address indexed newVault);
     event NetworkIdsUpdated(uint32 polygon, uint32 katana);
+    event BridgeAddressSet(address indexed bridge);
     
     constructor(
-        address _bridge,
         address _usdc,
         address _bridgeVault
     ) {
-        require(_bridge != address(0), "AggLayerAdapter: Invalid bridge");
         require(_usdc != address(0), "AggLayerAdapter: Invalid USDC");
         require(_bridgeVault != address(0), "AggLayerAdapter: Invalid vault");
         
-        bridge = IPolygonZkEVMBridge(_bridge);
         usdc = _usdc;
         bridgeVault = _bridgeVault;
+    }
+    
+    /**
+     * @notice Set the bridge address (can only be called once)
+     * @param _bridge Address of the AggLayer bridge contract
+     */
+    function setBridgeAddress(address _bridge) external onlyOwner {
+        require(_bridge != address(0), "AggLayerAdapter: Invalid bridge");
+        require(address(bridge) == address(0), "AggLayerAdapter: Bridge already set");
+        
+        bridge = IPolygonZkEVMBridge(_bridge);
+        emit BridgeAddressSet(_bridge);
     }
     
     /**
@@ -91,6 +101,7 @@ contract AggLayerAdapter is Ownable(msg.sender), ReentrancyGuard {
         uint256 amount,
         address recipient
     ) external nonReentrant {
+        require(address(bridge) != address(0), "AggLayerAdapter: Bridge not configured");
         require(msg.sender == bridgeVault, "AggLayerAdapter: Only BridgeVault");
         require(amount > 0, "AggLayerAdapter: Zero amount");
         require(recipient != address(0), "AggLayerAdapter: Invalid recipient");
